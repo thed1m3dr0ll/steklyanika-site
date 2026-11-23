@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, extname } from 'node:path';
-import { adminRoutes, serveMedia } from './admin.mjs';
+import { adminRoutes, serveMedia, serveResume } from './admin.mjs';
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
@@ -344,6 +344,11 @@ const server = createServer(async (req, res) => {
   // Медиатека отдаётся отдельно и раньше роутера: имя файла проверяется в serveMedia по базе
   if ((req.method ?? 'GET') === 'GET' && url.pathname.startsWith('/media/')) {
     return serveMedia(req, res, url.pathname.slice('/media/'.length));
+  }
+
+  // Резюме — только по авторизации. Проверка роли внутри serveResume, тут ничего не решаем
+  if ((req.method ?? 'GET') === 'GET' && url.pathname.startsWith('/api/admin/files/')) {
+    return serveResume(req, res, url.pathname.slice('/api/admin/files/'.length));
   }
 
   const route = matchRoute(req.method ?? 'GET', url.pathname);

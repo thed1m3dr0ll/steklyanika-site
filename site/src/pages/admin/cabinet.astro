@@ -63,8 +63,23 @@ import Base from '../../layouts/Base.astro';
 
         <section class="cab__panel" data-panel="hr" hidden>
           <h2>Вакансии и отклики</h2>
-          <p class="cab__hint">Статус вакансии и синхронизация с HH — в разработке. Схема в базе уже готова.</p>
+
+          <!-- HH: подключение и синхронизация. Кнопки рабочие, но требуют ключей приложения в .env -->
+          <div class="cab__hh">
+            <div id="hh-status" class="cab__hint">Проверяю подключение к HH…</div>
+            <div class="cab__hh-actions">
+              <a class="cab__btn" id="hh-auth" href="/api/admin/hh/auth" target="_blank" rel="noopener">Подключить HH</a>
+              <button class="cab__btn cab__btn--ghost" id="hh-sync" type="button">Синхронизировать</button>
+            </div>
+            <!-- Про тариф пишем прямо в интерфейсе: HR должен знать, что каждый прогон стоит денег -->
+            <p class="cab__warn">Внимание: у HH получение откликов тарифицируется пакетами запросов. Не жмите синхронизацию без нужды.</p>
+          </div>
+
+          <h3 class="cab__h3">Вакансии</h3>
           <div id="vac-list" class="cab__list">Загрузка…</div>
+
+          <h3 class="cab__h3">Отклики</h3>
+          <div id="app-list" class="cab__list">Загрузка…</div>
         </section>
 
         <section class="cab__panel" data-panel="texts" hidden>
@@ -127,6 +142,14 @@ import Base from '../../layouts/Base.astro';
   .cab__grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: #eef1f0; }
   .cab__grid figcaption { font-size: 12px; color: #8b9591; margin-top: 6px; word-break: break-word; }
   .cab__pre { background: #f6f8f7; padding: 16px; border-radius: 10px; overflow: auto; font-size: 12px; max-height: 400px; }
+  .cab__hh { padding: 16px; border: 1px solid #e3e7e5; border-radius: 10px; margin-bottom: 24px; }
+  .cab__hh-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 10px; }
+  .cab__btn--ghost { background: #eef1f0; color: #3d4a47; }
+  .cab__btn--ghost:hover { background: #e1e6e4; }
+  a.cab__btn { text-decoration: none; display: inline-block; }
+  .cab__warn { color: #8a6d1f; background: #fdf7e3; padding: 10px 12px; border-radius: 8px; font-size: 13px; margin: 0; }
+  .cab__h3 { font-size: 16px; margin: 24px 0 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #6b7673; }
+  .cab__row a { color: #2c6e5a; }
   @media (max-width: 640px) { .cab { padding-top: 90px; } .cab__row { grid-template-columns: 1fr; } }
 </style>
 
@@ -183,6 +206,7 @@ import Base from '../../layouts/Base.astro';
     document.querySelectorAll<HTMLElement>('.cab__panel').forEach((p) => (p.hidden = p.dataset.panel !== name));
     // Ленивая загрузка: не тянем все пять панелей сразу, открываем то, что человек реально смотрит
     if (name === 'leads') loadLeads();
+    if (name === 'hr') { loadHH(); loadVacancies(); loadApplications(); }
     if (name === 'texts') loadTexts();
     if (name === 'media') loadMedia();
   }
@@ -210,6 +234,49 @@ import Base from '../../layouts/Base.astro';
           <small>${fmt(l.created_at)} · ${esc(l.source)} · ${esc(l.page)}</small>
         </div>
         <span class="cab__badge ${l.status === 'new' ? 'cab__badge--new' : ''}">${esc(l.status)}</span>
+      </div>`).join('');
+  }
+
+  // ---------- HH ----------
+  async function loadHH() {
+    const box = $<HTMLElement>('#hh-status');
+    const st = await api('/hh/status').catch(() => null);
+    if (!st) { box.textContent = 'Статус HH не получен'; return; }
+
+    // Три состояния, и человек должен понимать разницу: ключей нет / ключи есть, токена нет / всё есть
+    if (!st.configured) {
+      box.innerHTML = 'Ключи приложения HH не заданы. Заполните <b>HH_CLIENT_ID</b> и <b>HH_CLIENT_SECRET</b> в .env и перезапустите сервер.';
+    } else if (!st.hasToken) {
+      box.textContent = 'Ключи есть, токена нет. Нажмите «Подключить HH» и разрешите доступ.';
+    } else {
+      const until = st.expiresAt ? new Date(st.expiresAt).toLocaleString('ru-RU') : '—';
+      const last = st.lastSync ? ` Последняя синхронизация: ${st.lastSync.status} (${st.lastSync.message ?? ''})` : '';
+      box.textContent = `HH подключён, токен действует до ${until}.${last}`;
+    }
+  }
+
+  async function loadApplications() {
+    const box = $<HTMLElement>('#app-list');
+    const { items } = await api('/applications').catch(() => ({ items: [] }));
+    if (!items.length) { box.textContent = 'Откликов нет'; return; }
+    box.innerHTML = items.map((a: any) => `
+      <div class="cab__row">
+        <div>
+          <b>${esc(a.name) || 'Без имени'}</b> · ${esc(a.vacancy_slug)}
+          <small>${fmt(a.created_at)} · ${esc(a.source)} · ${esc(a.hh_status || a.status)}</small>
+        </div>
+        <span class="cab__badge ${a.status === 'new' ? 'cab__badge--new' : ''}">${esc(a.status)}</span>
+      </div>`).join('');
+  }
+
+  async function loadVacancies() {
+    const box = $<HTMLElement>('#vac-list');
+    const { items } = await api('/vacancies').catch(() => ({ items: [] }));
+    if (!items.length) { box.textContent = 'Вакансий нет'; return; }
+    box.innerHTML = items.map((v: any) => `
+      <div class="cab__row">
+        <div><b>${esc(v.title)}</b><small>${esc(v.slug)}${v.hh_url ? ' · <a href="' + esc(v.hh_url) + '" target="_blank" rel="noopener">на HH</a>' : ''}</small></div>
+        <span class="cab__badge">${esc(v.status)}</span>
       </div>`).join('');
   }
 
@@ -283,6 +350,20 @@ import Base from '../../layouts/Base.astro';
     if (!res.ok) { err.textContent = `Не загрузилось: ${res.error ?? 'ошибка'}`; return; }
     form.reset();
     loadMedia();
+  });
+
+  $<HTMLElement>('#hh-sync').addEventListener('click', async () => {
+    const btn = $<HTMLButtonElement>('#hh-sync');
+    const box = $<HTMLElement>('#hh-status');
+    btn.disabled = true;
+    box.textContent = 'Синхронизирую… это может занять до минуты';
+    const res = await api('/hh/sync', { method: 'POST' }).catch(() => ({ ok: false, message: 'Сервер не ответил' }));
+    box.textContent = res.ok
+      ? `Готово: вакансий ${res.vacancies}, откликов ${res.applications}`
+      : `Не вышло: ${res.message ?? 'неизвестная ошибка'}`;
+    btn.disabled = false;
+    loadVacancies();
+    loadApplications();
   });
 
   $<HTMLElement>('#stats-refresh').addEventListener('click', async () => {

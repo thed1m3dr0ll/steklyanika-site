@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, extname, basename } from 'node:path';
+import { syncHH, authUrl, exchangeCode, hhStatus } from './hh.mjs';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? './data/uploads';
@@ -272,6 +273,44 @@ export const adminRoutes = {
     return json(res, 200, { ok: true });
   },
 
+  // ---------- HH (HR) ----------
+
+  // GET /api/admin/hh/status — что с подключением, когда последняя синхронизация
+  async 'GET /api/admin/hh/status'(req, res) {
+    if (!requireRole(req, res, ['hr'])) return;
+    return json(res, 200, { ok: true, ...hhStatus() });
+  },
+
+  // GET /api/admin/hh/auth — редирект на HH. Открывать в браузере под HR
+  async 'GET /api/admin/hh/auth'(req, res) {
+    if (!requireRole(req, res, ['hr'])) return;
+    res.writeHead(302, { Location: authUrl() });
+    res.end();
+  },
+
+  // GET /api/admin/hh/callback — HH возвращает сюда код
+  async 'GET /api/admin/hh/callback'(req, res, url) {
+    const code = url.searchParams.get('code');
+    if (!code) return json(res, 400, { ok: false, error: 'no_code' });
+    try {
+      const r = await exchangeCode(code);
+      // Отвечаем человекочитаемо: это открывается в браузере, не в fetch
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<p>HH подключён. Токен сохранён, можно закрыть вкладку и запускать синхронизацию в кабинете.</p>');
+      return r;
+    } catch (e) {
+      return json(res, 502, { ok: false, error: String(e?.message ?? e) });
+    }
+  },
+
+  // POST /api/admin/hh/sync — запустить синхронизацию руками.
+  // Специально не по крону: каждый прогон может стоить денег по тарифу HH
+  async 'POST /api/admin/hh/sync'(req, res) {
+    if (!requireRole(req, res, ['hr'])) return;
+    const result = await syncHH();
+    return json(res, result.ok ? 200 : 502, { ok: result.ok, ...result });
+  },
+
   // ---------- Тексты (маркетинг) ----------
 
   // GET /api/admin/texts — черновики и опубликованное разом, фронт сам решит, что показать
@@ -387,6 +426,39 @@ async function fetchMetrika() {
     return { error: e?.name === 'AbortError' ? 'Метрика не ответила за 15 с' : String(e?.message ?? e) };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// ---------- Выдача файлов резюме ----------
+// Отдаём ТОЛЬКО по авторизации и только роли hr/admin. Файл резюме — персданные,
+// прямая ссылка на него не должна работать ни при каких условиях.
+// Ищем файл в базе по id: путь из запроса никогда не подставляем в файловую систему.
+export async function serveResume(req, res, id) {
+  const user = currentUser(req);
+  if (!user) return json(res, 401, { ok: false, error: 'unauthorized' });
+  if (user.role !== 'admin' && user.role !== 'hr') return json(res, 403, { ok: false, error: 'forbidden' });
+
+  const row = db.prepare('SELECT stored_name, original_name, mime, size FROM files WHERE id = ?').get(String(id ?? ''));
+  if (!row) return json(res, 404, { ok: false, error: 'not_found' });
+
+  const path = join(UPLOAD_DIR, row.stored_name);
+  try {
+    const buf = readFileSync(path);
+    // RFC 5987 для кириллицы в имени файла: без filename* браузер сохранит кракозябры.
+    // Сам filename оставляем ASCII-заглушкой — старые клиенты её понимают
+    const ascii = row.original_name.replace(/[^\x20-\x7E]/g, '_');
+    res.writeHead(200, {
+      'Content-Type': row.mime || 'application/octet-stream',
+      'Content-Length': buf.length,
+      // attachment, а не inline: файл должен скачиваться, а не открываться в браузере.
+      // Так меньше шансов, что подсунутый pdf выполнит что-то на нашей странице
+      'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(row.original_name)}`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(buf);
+  } catch {
+    return json(res, 404, { ok: false, error: 'not_found' });
   }
 }
 
