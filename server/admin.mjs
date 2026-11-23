@@ -199,6 +199,22 @@ export const adminRoutes = {
 
   // ---------- Заявки (HR + admin) ----------
 
+  // GET /api/admin/counters — только цифры для бейджей на вкладках.
+  // Отдельная ручка, потому что кабинет опрашивает её по таймеру: тянуть за собой полные
+  // списки заявок на каждый тик — это мегабайты впустую
+  async 'GET /api/admin/counters'(req, res) {
+    const user = requireRole(req, res, ['hr', 'marketing']);
+    if (!user) return;
+    const one = (sql) => db.prepare(sql).get()?.n ?? 0;
+    return json(res, 200, {
+      ok: true,
+      leads_new: one("SELECT COUNT(*) n FROM leads WHERE status = 'new'"),
+      apps_new: one("SELECT COUNT(*) n FROM applications WHERE status = 'new'"),
+      // «Свежие» — за сутки. По ним видно, случилось ли что-то с момента прошлого захода
+      leads_today: one("SELECT COUNT(*) n FROM leads WHERE created_at >= datetime('now', '-1 day')"),
+    });
+  },
+
   // GET /api/admin/leads?status=new&source=resume&q=поиск
   async 'GET /api/admin/leads'(req, res, url) {
     if (!requireRole(req, res, ['hr', 'marketing'])) return;
@@ -213,7 +229,10 @@ export const adminRoutes = {
     if (status) { where.push('status = ?'); args.push(status); }
     if (source) { where.push('source = ?'); args.push(source); }
     if (q) { where.push('(name LIKE ? OR contact LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
-    const sql = `SELECT id, created_at, source, name, contact, status, comment, page
+    // payload тянем в список, а не отдельной ручкой: заявок десятки, не тысячи, и лишний круг
+    // до сервера на каждый клик по карточке тут дороже, чем 30 лишних килобайт в ответе.
+    // ip_hash наружу отдаём, потому что по нему ловятся дубли и спам с одной машины
+    const sql = `SELECT id, created_at, source, name, contact, status, comment, page, payload, ip_hash, user_agent
                  FROM leads ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                  ORDER BY created_at DESC LIMIT ?`;
     args.push(limit);
@@ -222,7 +241,9 @@ export const adminRoutes = {
 
   // PATCH /api/admin/leads/:id — сменить статус и/или дописать комментарий
   async 'PATCH /api/admin/leads/:id'(req, res, url, params) {
-    if (!requireRole(req, res, ['hr'])) return;
+    // Роли те же, что у вкладки заявок в кабинете. Иначе маркетинг видит список, но не может
+    // отметить спам — самая частая операция именно там
+    if (!requireRole(req, res, ['hr', 'marketing'])) return;
     const b = await readJson(req);
     const allowed = ['new', 'in_progress', 'archived', 'spam'];
     if (b.status && !allowed.includes(b.status)) return json(res, 400, { ok: false, error: 'bad_status' });
