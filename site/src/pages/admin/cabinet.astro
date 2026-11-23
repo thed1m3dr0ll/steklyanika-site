@@ -138,19 +138,27 @@ import Base from '../../layouts/Base.astro';
 
   const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel);
 
-  async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  // opts.auth401 — что делать на 401. По умолчанию считаем, что сессия кончилась и разлогиниваем.
+  // Но на самой ручке логина 401 значит «неверный пароль», и разлогинивать там нечего —
+  // раньше из-за этого человек видел «Сервер не отвечает» вместо «Неверная почта или пароль».
+  async function api<T = any>(path: string, init: RequestInit = {}, opts: { auth401?: boolean } = {}): Promise<T> {
+    // Порядок важен: init первым, наши поля поверх. Наоборот было бы плохо —
+    // случайный credentials в init перетёр бы same-origin и cookie сессии не уехала бы
     const res = await fetch(`/api/admin${path}`, {
+      ...init,
       credentials: 'same-origin', // без этого HttpOnly-cookie не уйдёт и всё сломается
       headers: init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
-      ...init,
     });
-    // Сессия кончилась — честно разлогиниваем, а не сыпем 401 в каждой панели
-    if (res.status === 401) { me = null; renderAuth(); throw new Error('unauthorized'); }
+    if (res.status === 401 && opts.auth401 !== false) {
+      me = null; renderAuth(); throw new Error('unauthorized');
+    }
     return res.json() as Promise<T>;
   }
 
   const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
-  const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+  // Экранируем и одинарную кавычку: значения уходят не только в текст, но и в атрибуты.
+  // Вставлять сырое из базы в innerHTML нельзя ни при каких условиях — это готовый XSS
+  const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
   function renderAuth() {
     $<HTMLElement>('#login').hidden = !!me;
@@ -226,7 +234,7 @@ import Base from '../../layouts/Base.astro';
     if (!items.length) { box.textContent = 'Файлов пока нет'; return; }
     box.innerHTML = items.map((m: any) => `
       <figure>
-        <img src="/media/${esc(m.stored_name)}" alt="${esc(m.alt)}" loading="lazy" />
+        <img src="/media/${encodeURIComponent(m.stored_name)}" alt="${esc(m.alt)}" loading="lazy" />
         <figcaption>${esc(m.original_name)}<br>${Math.round((m.size ?? 0) / 1024)} КБ</figcaption>
       </figure>`).join('');
   }
@@ -239,7 +247,7 @@ import Base from '../../layouts/Base.astro';
     const err = $<HTMLElement>('#login-err');
     err.textContent = '';
     try {
-      const res = await api('/login', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }) });
+      const res = await api('/login', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }) }, { auth401: false });
       if (!res.ok) { err.textContent = 'Неверная почта или пароль'; return; }
       await init();
     } catch {

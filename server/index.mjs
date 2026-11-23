@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, extname } from 'node:path';
-import { adminRoutes } from './admin.mjs';
+import { adminRoutes, serveMedia } from './admin.mjs';
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
@@ -86,7 +86,8 @@ const json = (res, code, body) => {
   res.end(JSON.stringify(body));
 };
 
-// Хеш IP, а не IP. Соль обязательна, иначе деанонимизировать журнал — дело пяти минут
+// Хеш IP, а не IP. Соль обязательна, иначе деанонимизировать журнал — дело пяти минут.
+// ВАЖНО: если IP_SALT остался дефолтным, в журнале мусор, а не псевдоним. Проверяем на старте и орём.
 const hashIp = (req) => {
   const ip = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || '';
   return createHash('sha256').update(ip + IP_SALT).digest('hex').slice(0, 32);
@@ -167,8 +168,6 @@ async function readMultipart(req) {
 // ---------- Валидация. Дублирует то, что в браузере, и это НЕ лишнее ----------
 // Проверка на фронте защищает от опечаток, но не от ботов. Обязательные поля проверяем заново.
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const PHONE = /^[\d\s()+-]+$/;
 const LIMITS = { name: 120, contact: 200, comment: 4000, page: 500 };
 
 const clean = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -341,6 +340,12 @@ function matchRoute(method, pathname) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
+
+  // Медиатека отдаётся отдельно и раньше роутера: имя файла проверяется в serveMedia по базе
+  if ((req.method ?? 'GET') === 'GET' && url.pathname.startsWith('/media/')) {
+    return serveMedia(req, res, url.pathname.slice('/media/'.length));
+  }
+
   const route = matchRoute(req.method ?? 'GET', url.pathname);
   const handler = route?.handler;
   if (!handler) return json(res, 404, { ok: false, error: 'not_found' });
@@ -362,6 +367,12 @@ const server = createServer(async (req, res) => {
     json(res, e?.message === 'body_too_large' ? 413 : 500, { ok: false, error: 'internal' });
   }
 });
+
+// Дефолтная соль = фикция вместо псевдонима. Не валим сервис (сайт важнее),
+// но пишем так, чтобы это увидели в логах и на мониторинге
+if (IP_SALT === 'CHANGE_ME_IN_ENV' || IP_SALT.length < 16) {
+  console.error('[api] ВНИМАНИЕ: IP_SALT не задан или слишком короткий. Хеши IP в журнале согласий бесполезны. Задай случайную строку 32+ символа в .env');
+}
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[api] слушаю ${PORT}, база ${DB_PATH}`);

@@ -6,7 +6,7 @@
 // Проверка роли — в одном месте (requireRole), чтобы не забыть её на новой ручке. Забытая проверка = дыра.
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, extname, basename } from 'node:path';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
@@ -387,6 +387,37 @@ async function fetchMetrika() {
     return { error: e?.name === 'AbortError' ? 'Метрика не ответила за 15 с' : String(e?.message ?? e) };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// ---------- Отдача файлов медиатеки ----------
+// Файл ищем в базе по имени, а не по пути из запроса. Иначе классика: /media/../../etc/passwd.
+// Список разрешённых расширений тоже проверяем — на случай, если в медиатеку как-то попал html
+const MEDIA_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.svg', '.gif'];
+
+export async function serveMedia(req, res, name) {
+  // decodeURIComponent, потому что имя может прийти с %-кодированием
+  const safe = decodeURIComponent(String(name ?? ''));
+  if (!safe || safe.includes('/') || safe.includes('..')) return json(res, 400, { ok: false, error: 'bad_name' });
+  if (!MEDIA_EXT.includes(extname(safe).toLowerCase())) return json(res, 415, { ok: false, error: 'bad_ext' });
+
+  const row = db.prepare('SELECT stored_name, mime FROM media WHERE stored_name = ?').get(safe);
+  if (!row) return json(res, 404, { ok: false, error: 'not_found' });
+
+  const path = join(MEDIA_DIR, row.stored_name);
+  try {
+    const buf = readFileSync(path);
+    res.writeHead(200, {
+      'Content-Type': row.mime || 'application/octet-stream',
+      'Content-Length': buf.length,
+      // Иммутабельный кэш: имя файла это UUID, содержимое под ним не меняется никогда
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      // nosniff: браузер не должен додумывать тип сам. Защита от подмены картинки на html
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(buf);
+  } catch {
+    return json(res, 404, { ok: false, error: 'not_found' });
   }
 }
 
