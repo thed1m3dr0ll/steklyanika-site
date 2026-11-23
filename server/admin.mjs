@@ -9,6 +9,7 @@ import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, extname, basename } from 'node:path';
 import { syncHH, authUrl, exchangeCode, hhStatus } from './hh.mjs';
+import { json, readJson, readMultipart } from './http.mjs';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? './data/uploads';
@@ -153,11 +154,6 @@ function requireRole(req, res, roles) {
   }
   return user;
 }
-
-const json = (res, code, body, headers = {}) => {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
-  res.end(JSON.stringify(body));
-};
 
 // ---------- Ручки админки ----------
 
@@ -493,45 +489,3 @@ export async function serveMedia(req, res, name) {
   }
 }
 
-// ---------- Мелочи, которые нужны и админке, и основному серверу ----------
-// Лежат тут, чтобы не плодить третий файл ради двух функций
-export async function readJson(req) {
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return {}; }
-}
-
-export async function readMultipart(req) {
-  const ct = String(req.headers['content-type'] ?? '');
-  const m = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!m) return { fields: {}, file: null };
-  const boundary = Buffer.from(`--${(m[1] ?? m[2]).trim()}`);
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  const raw = Buffer.concat(chunks);
-
-  const fields = {};
-  let file = null;
-  let pos = 0;
-  while (true) {
-    const start = raw.indexOf(boundary, pos);
-    if (start < 0) break;
-    const after = start + boundary.length;
-    if (raw.subarray(after, after + 2).toString() === '--') break;
-    const headStart = raw.subarray(after, after + 2).toString() === '\r\n' ? after + 2 : after;
-    const headEnd = raw.indexOf(Buffer.from('\r\n\r\n'), headStart);
-    if (headEnd < 0) break;
-    const headers = raw.subarray(headStart, headEnd).toString('utf8');
-    const bodyStart = headEnd + 4;
-    const next = raw.indexOf(boundary, bodyStart);
-    const bodyEnd = next < 0 ? raw.length : next - 2;
-    const name = headers.match(/name="([^"]*)"/i)?.[1] ?? '';
-    const fname = headers.match(/filename="([^"]*)"/i)?.[1];
-    const type = headers.match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim() ?? '';
-    const buf = raw.subarray(bodyStart, Math.max(bodyStart, bodyEnd));
-    if (fname && name) { if (!file) file = { name: fname, buf: Buffer.from(buf), mime: type }; }
-    else if (name) fields[name] = buf.toString('utf8');
-    pos = next < 0 ? raw.length : next;
-  }
-  return { fields, file };
-}

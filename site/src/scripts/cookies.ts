@@ -79,11 +79,24 @@ export function setCookieChoice(choice: CookieChoice, source: ConsentRecord['sou
   notify();
 }
 
-// Передача записи на сервер. Пока сервера нет, запись остаётся только в браузере.
+// Передача записи на сервер. Запись в localStorage юридически ничего не доказывает:
+// посетитель может её удалить или подправить через devtools. Поэтому дублируем на сервер.
+//
+// keepalive — критично: человек часто ставит галочку и сразу закрывает вкладку.
+// Без keepalive браузер прибьёт запрос вместе со страницей, и согласие потеряется.
 function sendConsentRecord(record: ConsentRecord) {
-  // TODO: при подключении постоянного хостинга заменить на реальную отправку, например:
-  // fetch('/api/consent', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) }).catch(() => {});
-  void record;
+  try {
+    // Ошибку сети намеренно глотаем: не ронять же интерфейс из-за аналитики.
+    // Но и молчать нельзя — в консоль, чтобы при разборе жалоб было видно
+    fetch('/api/consent', {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record),
+    }).catch((e) => console.warn('[согласие] запись не ушла на сервер', e));
+  } catch (e) {
+    console.warn('[согласие] отправка недоступна', e);
+  }
 }
 
 const listeners: (() => void)[] = [];

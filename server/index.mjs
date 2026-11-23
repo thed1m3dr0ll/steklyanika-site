@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, extname } from 'node:path';
 import { adminRoutes, serveMedia, serveResume } from './admin.mjs';
+import { json, readJson, readMultipart, MAX_BODY } from './http.mjs';
 
 const PORT = Number(process.env.API_PORT ?? 8787);
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
@@ -81,11 +82,6 @@ db.exec(`
 
 const now = () => new Date().toISOString();
 
-const json = (res, code, body) => {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(body));
-};
-
 // Хеш IP, а не IP. Соль обязательна, иначе деанонимизировать журнал — дело пяти минут.
 // ВАЖНО: если IP_SALT остался дефолтным, в журнале мусор, а не псевдоним. Проверяем на старте и орём.
 const hashIp = (req) => {
@@ -94,76 +90,7 @@ const hashIp = (req) => {
 };
 
 // ---------- Чтение тела запроса ----------
-
-const MAX_BODY = 12 * 1024 * 1024; // чуть больше лимита файла, чтобы multipart-обвязка влезла
-
-function readRaw(req, limit = MAX_BODY) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      // Жёсткий обрыв: без него бот с бесконечным потоком съест всю память
-      if (size > limit) { reject(new Error('body_too_large')); req.destroy(); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-
-async function readJson(req) {
-  const raw = await readRaw(req);
-  try { return JSON.parse(raw.toString('utf8')); } catch { return {}; }
-}
-
-// Разбор multipart руками. Библиотеки тянуть не хочется ради одной формы,
-// а формат простой: разделитель из boundary, части с заголовками и телом.
-async function readMultipart(req) {
-  const ct = String(req.headers['content-type'] ?? '');
-  const m = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!m) throw new Error('no_boundary');
-  const boundary = Buffer.from(`--${(m[1] ?? m[2]).trim()}`);
-  const raw = await readRaw(req);
-
-  const fields = {};
-  let file = null;
-  let pos = 0;
-
-  while (true) {
-    const start = raw.indexOf(boundary, pos);
-    if (start < 0) break;
-    const afterDelim = start + boundary.length;
-    if (raw.subarray(afterDelim, afterDelim + 2).toString() === '--') break; // финальный разделитель
-    // Пропускаем CRLF после разделителя, иначе заголовки начинаются с пустой строки
-    const headStart = raw.subarray(afterDelim, afterDelim + 2).toString() === '\r\n' ? afterDelim + 2 : afterDelim;
-    const headEnd = raw.indexOf(Buffer.from('\r\n\r\n'), headStart);
-    if (headEnd < 0) break;
-
-    const headers = raw.subarray(headStart, headEnd).toString('utf8');
-    const bodyStart = headEnd + 4;
-    const next = raw.indexOf(boundary, bodyStart);
-    const bodyEnd = next < 0 ? raw.length : next - 2; // минус CRLF перед разделителем
-
-    const nameMatch = headers.match(/name="([^"]*)"/i);
-    const fileMatch = headers.match(/filename="([^"]*)"/i);
-    // Тип файла берём из его собственной части, а не из общего заголовка запроса:
-    // иначе в базу уедет «multipart/form-data; boundary=...» и по mime потом ничего не найти
-    const partType = headers.match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim() ?? '';
-    const fieldName = nameMatch?.[1] ?? '';
-    const body = raw.subarray(bodyStart, Math.max(bodyStart, bodyEnd));
-
-    if (fileMatch && fieldName) {
-      // Файл берём только один: два резюме в одной заявке — это уже не форма, а атака
-      if (!file) file = { name: fileMatch[1], buf: Buffer.from(body), mime: partType };
-    } else if (fieldName) {
-      fields[fieldName] = body.toString('utf8');
-    }
-    pos = next < 0 ? raw.length : next;
-  }
-
-  return { fields, file };
-}
+// Сами функции лежат в http.mjs, тут только их использование
 
 // ---------- Валидация. Дублирует то, что в браузере, и это НЕ лишнее ----------
 // Проверка на фронте защищает от опечаток, но не от ботов. Обязательные поля проверяем заново.
