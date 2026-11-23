@@ -26,8 +26,10 @@ if [ ! -f .env ]; then
 fi
 
 # Зависимости сайта
-if [ ! -d site/node_modules ]; then
-  echo "Ставлю зависимости (один раз, пару минут)..."
+# Проверяем не папку, а конкретный пакет: после git pull node_modules может существовать,
+# но без @astrojs/sitemap — и сборка упадёт с непонятной ошибкой импорта
+if [ ! -d site/node_modules/@astrojs/sitemap ]; then
+  echo "Ставлю зависимости (один раз, пара минут)..."
   (cd site && npm install --no-audit --no-fund)
 fi
 
@@ -54,4 +56,6 @@ echo "           hr@steklyanika.ru   / hr-pass-2026!      (HR)"
 echo "           mkt@steklyanika.ru  / mkt-pass-2026!     (маркетинг)"
 echo "======================================================================"
 echo
+# Открываем браузер сами: человек только что запустил скрипт, ему не нужно копировать адрес
+(sleep 6 && open "http://localhost:4321/admin/cabinet/") &
 npm run dev
