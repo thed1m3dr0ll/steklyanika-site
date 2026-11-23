@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
-import { join, extname } from 'node:path';
+import { join, extname, dirname } from 'node:path';
 import { adminRoutes, serveMedia, serveResume } from './admin.mjs';
 import { json, readJson, readMultipart, MAX_BODY } from './http.mjs';
 
@@ -29,6 +29,8 @@ const RETENTION = {
 };
 
 mkdirSync(UPLOAD_DIR, { recursive: true });
+// SQLite папок не создаёт. На чистом клоне data/ ещё нет — без этого сервер умирал на старте
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`

@@ -33,17 +33,36 @@ if [ ! -d site/node_modules/@astrojs/sitemap ]; then
   (cd site && npm install --no-audit --no-fund)
 fi
 
-# База и пользователи. Повторный запуск ничего не ломает: seed-user обновляет, а не дублирует
-node server/seed-user.mjs boss@steklyanika.ru admin 'admin-pass-2026!' 2>/dev/null || true
-node server/seed-user.mjs hr@steklyanika.ru hr 'hr-pass-2026!' 2>/dev/null || true
-node server/seed-user.mjs mkt@steklyanika.ru marketing 'mkt-pass-2026!' 2>/dev/null || true
-node server/seed-demo.mjs 2>/dev/null || true
+# Папку под базу создаём до всех скриптов. SQLite каталоги не делает, а в git data/ не лежит:
+# на свежем клоне его нет, и раньше сервер падал с 'unable to open database file'
+mkdir -p data
 
-# Сервер заявок в фоне, сайт на переднем плане. При закрытии окна гасим оба
-echo "Поднимаю сервер заявок и сайт..."
+# Сервер заявок поднимаем ПЕРВЫМ. Он создаёт схему базы (leads, vacancies, applications, texts).
+# Демо-скрипт вставляет строки в эти таблицы, поэтому раньше него идти не может —
+# на чистой машине падал с 'no such table: leads'
+echo "Поднимаю сервер заявок..."
 node --env-file=.env server/index.mjs &
 API_PID=$!
 trap 'kill $API_PID 2>/dev/null' EXIT INT TERM
+
+# Ждём, пока база реально откроется. Без этого окна — гонка: сервер ещё грузится, а seed уже стучится.
+# 40 попыток по четверти секунды = 10 секунд потолок
+for _ in $(seq 1 40); do
+  if curl -sf -o /dev/null "http://127.0.0.1:${API_PORT:-8787}/api/health" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
+done
+
+# Пользователи и демо. Повторный запуск ничего не ломает: seed-user обновляет, а не дублирует.
+# Ошибки не глушим молча — иначе на пустой базе человек увидит пустой кабинет и не поймёт почему
+node server/seed-user.mjs boss@steklyanika.ru admin 'admin-pass-2026!' || echo "!! не создался админ"
+node server/seed-user.mjs hr@steklyanika.ru hr 'hr-pass-2026!' || echo "!! не создался HR"
+node server/seed-user.mjs mkt@steklyanika.ru marketing 'mkt-pass-2026!' || echo "!! не создался маркетинг"
+node server/seed-demo.mjs || echo "!! демо-данные не залились"
+
+# Сайт на переднем плане
+echo "Поднимаю сайт..."
 
 cd site
 echo

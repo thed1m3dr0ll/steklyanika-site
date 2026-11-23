@@ -8,6 +8,8 @@
 // для любого, кто узнал адрес. Пользователей заводит только тот, у кого есть доступ к серверу.
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes, scryptSync } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const [email, role = 'viewer', password] = process.argv.slice(2);
@@ -28,6 +30,9 @@ if (password.length < 12) {
   process.exit(1);
 }
 
+// Папку под базу создаём сами. SQLite не умеет создавать каталоги, а на свежем клоне data/ нет:
+// без этого скрипт падал с 'unable to open database file' прямо на первом запуске
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 db.exec(`CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, pass_hash TEXT NOT NULL,

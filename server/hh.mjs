@@ -12,6 +12,8 @@
 // а не падает. Так кабинет открывается и до подключения HH.
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const API = 'https://api.hh.ru';
@@ -19,6 +21,9 @@ const API = 'https://api.hh.ru';
 // Без этого они могут резать запросы. Контакт обязателен по их правилам
 const UA = `SteklyanikaAdmin/1.0 (${process.env.HH_CONTACT ?? 'admin@steklyanika.ru'})`;
 
+// hh.mjs грузится первым — раньше index.mjs успевал создать свои каталоги.
+// Отсюда и падал весь сервер на чистой машине: база открывается на импорте, до любого mkdir
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 
 // Таблица токенов: одна строка на провайдера. refresh_token — секрет, в логи не попадает НИКОГДА

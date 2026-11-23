@@ -7,7 +7,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join, extname, basename } from 'node:path';
+import { join, extname, basename, dirname } from 'node:path';
 import { syncHH, authUrl, exchangeCode, hhStatus } from './hh.mjs';
 import { json, readJson, readMultipart } from './http.mjs';
 
@@ -17,6 +17,8 @@ const MEDIA_DIR = process.env.MEDIA_DIR ?? './data/media';
 const SESSION_TTL = 8 * 3600_000; // 8 часов. Дольше держать сессию в админке с персданными — плохая идея
 
 mkdirSync(MEDIA_DIR, { recursive: true });
+// Каталог под базу может отличаться от каталога медиа (DB_PATH настраивается отдельно)
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`

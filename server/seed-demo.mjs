@@ -7,6 +7,8 @@
 // Если база боевая, скрипт откажется работать без явного флага --force.
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const force = process.argv.includes('--force');
@@ -16,6 +18,8 @@ if (process.env.NODE_ENV === 'production' && !force) {
   process.exit(1);
 }
 
+// Та же причина, что в seed-user: на чистом клоне каталога нет, SQLite сам его не создаст
+mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
 const now = () => new Date().toISOString();
 const daysAgo = (n) => new Date(Date.now() - n * 86_400_000).toISOString();
