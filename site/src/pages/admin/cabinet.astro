@@ -336,9 +336,20 @@ import Base from '../../layouts/Base.astro';
     const err = $<HTMLElement>('#login-err');
     err.textContent = '';
     try {
-      const res = await api('/login', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }) }, { auth401: false });
-      if (!res.ok) { err.textContent = 'Неверная почта или пароль'; return; }
+      const res = await api<any>('/login', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }) }, { auth401: false });
+      // Разные коды — разные причины, и человеку надо говорить правду.
+      // 429 значит «упёрся в лимит попыток» (5 в минуту на IP), это НЕ неверный пароль!!
+      // Раньше оба случая давали одну фразу, и разобрать проблему вслепую было невозможно
+      if (!res.ok) {
+        err.textContent = res.error === 'too_many_requests'
+          ? 'Слишком много попыток входа. Подождите минуту и попробуйте снова'
+          : 'Неверная почта или пароль';
+        return;
+      }
       await init();
+      // Пускаем только если сессия реально встала. На http с флагом Secure браузер выбрасывает cookie,
+      // и без этой проверки форма просто мигала бы молча — как будто кнопка не работает
+      if (!me) { err.textContent = 'Вход прошёл, но браузер не сохранил сессию. Адрес должен быть http://localhost:4321, не 127.0.0.1 и не https'; return; }
     } catch {
       err.textContent = 'Сервер не отвечает';
     }

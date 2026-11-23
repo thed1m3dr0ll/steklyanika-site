@@ -177,7 +177,8 @@ export const adminRoutes = {
     db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(now(), user.id);
 
     // HttpOnly — чтобы токен не утащили через XSS. SameSite=Strict — чтобы не прилетел с чужого сайта.
-    // Secure включится сам на https; в dev по http браузер его проигнорирует.
+    // Secure привязан к NODE_ENV, а не к реальной схеме запроса. Если поставить production на локальном
+    // http, браузер выбросит cookie и человек застрянет на форме входа без единой ошибки!!
     return json(res, 200, { ok: true, user: { id: user.id, name: user.name, role: user.role } }, {
       'Set-Cookie': `stk_session=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
     });
