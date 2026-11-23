@@ -13,6 +13,7 @@
     "deploy": "astro build && netlify deploy --prod --dir=dist --no-build"
   },
   "dependencies": {
+    "@astrojs/sitemap": "^3.7.6",
     "astro": "^7.3.5",
     "sharp": "^0.35.5",
     "swiper": "^14.3.0",

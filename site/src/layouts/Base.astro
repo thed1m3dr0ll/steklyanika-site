@@ -21,7 +21,10 @@ const fullTitle = title ? `${title} — ${site.name}` : `${site.name} — све
 // Адрес сайта — astro.config.mjs → site. Превью ссылок требует полных адресов (с доменом)
 const siteUrl = Astro.site ?? Astro.url;
 const abs = (path: string) => new URL(path, siteUrl).href;
-const pageUrl = abs(Astro.url.pathname);
+// Канонический адрес страницы. Хвостовой слеш оставляем (Astro так строит ссылки), но режем query —
+// иначе ?utm_source=... размножит один и тот же текст на десятки адресов и порежет позиции.
+const canonicalPath = Astro.url.pathname.replace(/\/+$/, '') + '/';
+const pageUrl = abs(canonicalPath);
 // превью 1200×630 — размер, который соцсети и мессенджеры показывают крупной картинкой
 const shareOf = (src: ImageMetadata) => getImage({ src, width: 1200, height: 630, fit: 'cover', format: 'jpg', quality: 82 });
 const share = await shareOf(image);
@@ -49,6 +52,13 @@ const robots = !site.indexable ? 'noindex, nofollow' : noindex ? 'noindex, follo
     <meta property="og:image:height" content="630" />
     <meta property="og:locale" content="ru_RU" />
     <meta name="twitter:card" content="summary_large_image" />
+    <!-- canonical: поисковик должен понимать, какой адрес у страницы основной. Без него склейка
+         www/без-www и вариаций со слешем растягивает вес по клонам. -->
+    <link rel="canonical" href={pageUrl} />
+    <link rel="alternate" hreflang="ru-RU" href={pageUrl} />
+    <link rel="alternate" hreflang="x-default" href={pageUrl} />
+    <!-- Ссылка на карту сайта прямо в head: Яндекс находит её и без robots.txt, лишним не будет. -->
+    <link rel="sitemap" type="application/xml" href="/sitemap-index.xml" />
     <script type="application/ld+json" set:html={JSON.stringify(ld)} />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

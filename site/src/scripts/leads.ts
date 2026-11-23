@@ -17,12 +17,50 @@ function consentRecord(form: HTMLFormElement) {
   };
 }
 
+// Куда стучимся. В dev Astro проксирует /api на локальный сервер заявок (см. astro.config.mjs),
+// в проде это тот же путь за тем же доменом — nginx разрулит. Абсолютных адресов тут быть не должно:
+// смена домена не должна требовать правки фронта.
+const API = '/api';
+
+// Заявка улетает на сервер. Ошибка сети не должна «терять» человека: он уже нажал кнопку,
+// нарисовать ему «попробуйте ещё раз» честнее, чем делать вид, что всё ушло.
 export async function submitLead(source: LeadSource, form: HTMLFormElement, data: Record<string, unknown>): Promise<void> {
   const payload = { source, ...data, consentRecord: consentRecord(form) };
-  // TODO: заменить на реальную отправку на сервер, например:
-  // await fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  console.info('[Стекляника] Заявка (отправка не подключена):', payload);
-  await new Promise((r) => setTimeout(r, 400));
+
+  // Резюме отправляем как FormData: файл в JSON не влезет, а base64 раздувает его на треть.
+  // В этом случае consentRecord едет строкой — сервер разбирает её сам (он это умеет, проверено).
+  const file = (data.resume as File | undefined) ?? (form.querySelector<HTMLInputElement>('input[type="file"]')?.files?.[0]);
+  let body: BodyInit;
+  const headers: Record<string, string> = {};
+
+  if (source === 'resume' && file) {
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === undefined || v === null) continue;
+      fd.append(k, typeof v === 'object' && !(v instanceof File) ? JSON.stringify(v) : String(v));
+    }
+    fd.set('resume', file);
+    body = fd; // Content-Type не ставим руками — браузер сам добавит boundary, иначе сервер не разберёт
+  } else {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(payload);
+  }
+
+  // Жёсткий таймаут. Без него «вечная» отправка вешает кнопку в состоянии загрузки и человек уходит
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+
+  try {
+    const res = await fetch(`${API}/lead`, { method: 'POST', headers, body, signal: ctrl.signal });
+    if (!res.ok) {
+      // 422 — сервер завернул данные: значит, наша проверка что-то пропустила.
+      // 429 — прилетели ботом или слишком часто. Разные тексты, чтобы человек понимал, что делать
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error === 'too_many_requests' ? 'Слишком много попыток, подождите минуту' : 'Заявка не прошла проверку на сервере');
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------- Проверка формы перед отправкой ----------

@@ -1,0 +1,294 @@
+---
+// Кабинет: вход и две панели в одном месте — HR и маркетинг. Одна страница, а не три:
+// переключаем панели по роли, чтобы не разводить три разных логина и три набора стилей.
+//
+// ВАЖНО: эта страница не защищена на уровне сборки. Она статическая, данные тянет с /api/admin/*,
+// а те ручки проверяют сессию сами. То есть без входа тут будет только форма логина и пустые списки.
+// Не вздумай «оптимизировать» и вшивать данные в HTML — это будет утечка персданных в публичный файл.
+import Base from '../../layouts/Base.astro';
+---
+
+<Base title="Кабинет" noindex>
+  <section class="cab">
+    <div class="cab__inner">
+      <h1 class="cab__title">Кабинет</h1>
+      <p class="cab__sub" id="cab-sub">Проверяем сессию…</p>
+
+      <!-- Вход. Показывается, пока нет сессии -->
+      <form class="cab__login" id="login" hidden>
+        <label class="cab__field">
+          <span>Почта</span>
+          <input type="email" name="email" autocomplete="username" required />
+        </label>
+        <label class="cab__field">
+          <span>Пароль</span>
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="cab__btn">Войти</button>
+        <p class="cab__err" id="login-err" role="alert"></p>
+      </form>
+
+      <!-- Панели. data-role ограничивает, кому какая доступна -->
+      <div class="cab__panels" id="panels" hidden>
+        <nav class="cab__tabs">
+          <button class="cab__tab" data-panel="leads" data-roles="hr,marketing">Заявки</button>
+          <button class="cab__tab" data-panel="hr" data-roles="hr">HR</button>
+          <button class="cab__tab" data-panel="texts" data-roles="marketing">Тексты</button>
+          <button class="cab__tab" data-panel="media" data-roles="marketing">Медиа</button>
+          <button class="cab__tab" data-panel="stats" data-roles="marketing">Статистика</button>
+          <button class="cab__logout" id="logout" type="button">Выйти</button>
+        </nav>
+
+        <section class="cab__panel" data-panel="leads">
+          <h2>Заявки с сайта</h2>
+          <div class="cab__filters">
+            <select id="f-status">
+              <option value="">Все статусы</option>
+              <option value="new">Новые</option>
+              <option value="in_progress">В работе</option>
+              <option value="archived">Архив</option>
+              <option value="spam">Спам</option>
+            </select>
+            <select id="f-source">
+              <option value="">Все формы</option>
+              <option value="modal">Окно заявки</option>
+              <option value="quiz">Квиз</option>
+              <option value="contacts">Контакты</option>
+              <option value="resume">Резюме</option>
+            </select>
+            <input id="f-q" type="search" placeholder="Имя или контакт" />
+          </div>
+          <div id="leads-list" class="cab__list">Загрузка…</div>
+        </section>
+
+        <section class="cab__panel" data-panel="hr" hidden>
+          <h2>Вакансии и отклики</h2>
+          <p class="cab__hint">Статус вакансии и синхронизация с HH — в разработке. Схема в базе уже готова.</p>
+          <div id="vac-list" class="cab__list">Загрузка…</div>
+        </section>
+
+        <section class="cab__panel" data-panel="texts" hidden>
+          <h2>Тексты сайта</h2>
+          <p class="cab__hint">Черновик не попадает на сайт, пока не нажмёте «Опубликовать».</p>
+          <div id="texts-list" class="cab__list">Загрузка…</div>
+        </section>
+
+        <section class="cab__panel" data-panel="media" hidden>
+          <h2>Медиатека</h2>
+          <form id="media-form" class="cab__upload">
+            <input type="file" name="file" accept="image/*" required />
+            <input type="text" name="alt" placeholder="Подпись (alt) — обязательна для SEO" />
+            <button type="submit" class="cab__btn">Загрузить</button>
+          </form>
+          <p class="cab__err" id="media-err" role="alert"></p>
+          <div id="media-list" class="cab__grid">Загрузка…</div>
+        </section>
+
+        <section class="cab__panel" data-panel="stats" hidden>
+          <h2>Статистика</h2>
+          <p class="cab__hint">Данные из Яндекс.Метрики. Обновляются кнопкой, не на каждый показ — щадим лимиты API.</p>
+          <button class="cab__btn" id="stats-refresh" type="button">Обновить данные</button>
+          <pre id="stats-out" class="cab__pre"></pre>
+        </section>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .cab { padding: 120px 0 80px; }
+  .cab__inner { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+  .cab__title { font-size: 34px; margin: 0 0 8px; }
+  .cab__sub { color: #6b7673; margin: 0 0 32px; }
+  .cab__login { display: grid; gap: 16px; max-width: 360px; }
+  .cab__field { display: grid; gap: 6px; font-size: 14px; }
+  .cab__field input { padding: 12px 14px; border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
+  .cab__btn { padding: 12px 20px; border: 0; border-radius: 8px; background: #3d4a47; color: #fff; font: inherit; cursor: pointer; }
+  .cab__btn:hover { background: #2f3a38; }
+  .cab__err { color: #b03030; margin: 8px 0 0; font-size: 14px; }
+  .cab__tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; border-bottom: 1px solid #e3e7e5; padding-bottom: 12px; }
+  .cab__tab { padding: 10px 16px; border: 0; background: #eef1f0; border-radius: 8px; font: inherit; cursor: pointer; }
+  .cab__tab.is-active { background: #3d4a47; color: #fff; }
+  .cab__logout { margin-left: auto; background: none; border: 0; color: #6b7673; cursor: pointer; font: inherit; text-decoration: underline; }
+  .cab__panel h2 { font-size: 22px; margin: 0 0 12px; }
+  .cab__hint { color: #6b7673; font-size: 14px; margin: 0 0 16px; }
+  .cab__filters { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .cab__filters select, .cab__filters input { padding: 10px 12px; border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
+  .cab__list { display: grid; gap: 10px; }
+  .cab__row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px 16px; border: 1px solid #e3e7e5; border-radius: 10px; }
+  .cab__row b { font-weight: 600; }
+  .cab__row small { color: #8b9591; display: block; margin-top: 4px; }
+  .cab__badge { font-size: 12px; padding: 3px 9px; border-radius: 20px; background: #eef1f0; white-space: nowrap; align-self: start; }
+  .cab__badge--new { background: #fdecec; color: #b03030; }
+  .cab__upload { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .cab__upload input[type=text] { flex: 1; min-width: 200px; padding: 10px 12px; border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
+  .cab__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .cab__grid figure { margin: 0; }
+  .cab__grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: #eef1f0; }
+  .cab__grid figcaption { font-size: 12px; color: #8b9591; margin-top: 6px; word-break: break-word; }
+  .cab__pre { background: #f6f8f7; padding: 16px; border-radius: 10px; overflow: auto; font-size: 12px; max-height: 400px; }
+  @media (max-width: 640px) { .cab { padding-top: 90px; } .cab__row { grid-template-columns: 1fr; } }
+</style>
+
+<script>
+  // Всё общение с бэком — через эти две обёртки. Так не забыть credentials
+  // (без него cookie сессии не поедет, и любая ручка ответит 401) и одинаково обработать 401.
+  type User = { id: string; email: string; name: string; role: 'admin' | 'hr' | 'marketing' | 'viewer' };
+  let me: User | null = null;
+
+  const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel);
+
+  async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+    const res = await fetch(`/api/admin${path}`, {
+      credentials: 'same-origin', // без этого HttpOnly-cookie не уйдёт и всё сломается
+      headers: init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+      ...init,
+    });
+    // Сессия кончилась — честно разлогиниваем, а не сыпем 401 в каждой панели
+    if (res.status === 401) { me = null; renderAuth(); throw new Error('unauthorized'); }
+    return res.json() as Promise<T>;
+  }
+
+  const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+  const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+
+  function renderAuth() {
+    $<HTMLElement>('#login').hidden = !!me;
+    $<HTMLElement>('#panels').hidden = !me;
+    $<HTMLElement>('#cab-sub').textContent = me
+      ? `Вы вошли как ${me.name || me.email}, роль: ${me.role}`
+      : 'Войдите, чтобы работать с заявками и контентом';
+
+    if (!me) return;
+
+    // Прячем вкладки, которые роли не положены. Это только UI — настоящая защита на сервере.
+    document.querySelectorAll<HTMLElement>('.cab__tab').forEach((tab) => {
+      const roles = (tab.dataset.roles ?? '').split(',');
+      tab.hidden = me!.role !== 'admin' && !roles.includes(me!.role);
+    });
+    const first = [...document.querySelectorAll<HTMLElement>('.cab__tab')].find((t) => !t.hidden);
+    if (first) openPanel(first.dataset.panel!);
+  }
+
+  function openPanel(name: string) {
+    document.querySelectorAll<HTMLElement>('.cab__tab').forEach((t) => t.classList.toggle('is-active', t.dataset.panel === name));
+    document.querySelectorAll<HTMLElement>('.cab__panel').forEach((p) => (p.hidden = p.dataset.panel !== name));
+    // Ленивая загрузка: не тянем все пять панелей сразу, открываем то, что человек реально смотрит
+    if (name === 'leads') loadLeads();
+    if (name === 'texts') loadTexts();
+    if (name === 'media') loadMedia();
+  }
+
+  // ---------- Заявки ----------
+  async function loadLeads() {
+    const params = new URLSearchParams();
+    const st = $<HTMLSelectElement>('#f-status').value;
+    const src = $<HTMLSelectElement>('#f-source').value;
+    const q = $<HTMLInputElement>('#f-q').value.trim();
+    if (st) params.set('status', st);
+    if (src) params.set('source', src);
+    if (q) params.set('q', q);
+
+    const box = $<HTMLElement>('#leads-list');
+    box.textContent = 'Загрузка…';
+    const { items } = await api(`/leads?${params}`).catch(() => ({ items: [] }));
+
+    if (!items.length) { box.textContent = 'Заявок нет'; return; }
+    // В innerHTML ни одного неэкранированного поля: имя и контакт вводит человек, а не мы
+    box.innerHTML = items.map((l: any) => `
+      <div class="cab__row">
+        <div>
+          <b>${esc(l.name)}</b> · ${esc(l.contact)}
+          <small>${fmt(l.created_at)} · ${esc(l.source)} · ${esc(l.page)}</small>
+        </div>
+        <span class="cab__badge ${l.status === 'new' ? 'cab__badge--new' : ''}">${esc(l.status)}</span>
+      </div>`).join('');
+  }
+
+  // ---------- Тексты ----------
+  async function loadTexts() {
+    const box = $<HTMLElement>('#texts-list');
+    box.textContent = 'Загрузка…';
+    const { items } = await api('/texts').catch(() => ({ items: [] }));
+    if (!items.length) { box.textContent = 'Правок пока нет'; return; }
+    box.innerHTML = items.map((t: any) => `
+      <div class="cab__row">
+        <div><b>${esc(t.key)}</b><small>${esc(t.value)}</small><small>${fmt(t.updated_at)} · ${esc(t.updated_by)}</small></div>
+        <span class="cab__badge ${t.status === 'draft' ? 'cab__badge--new' : ''}">${esc(t.status)}</span>
+      </div>`).join('');
+  }
+
+  // ---------- Медиа ----------
+  async function loadMedia() {
+    const box = $<HTMLElement>('#media-list');
+    box.textContent = 'Загрузка…';
+    const { items } = await api('/media').catch(() => ({ items: [] }));
+    if (!items.length) { box.textContent = 'Файлов пока нет'; return; }
+    box.innerHTML = items.map((m: any) => `
+      <figure>
+        <img src="/media/${esc(m.stored_name)}" alt="${esc(m.alt)}" loading="lazy" />
+        <figcaption>${esc(m.original_name)}<br>${Math.round((m.size ?? 0) / 1024)} КБ</figcaption>
+      </figure>`).join('');
+  }
+
+  // ---------- Обработчики ----------
+
+  $<HTMLFormElement>('#login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget as HTMLFormElement);
+    const err = $<HTMLElement>('#login-err');
+    err.textContent = '';
+    try {
+      const res = await api('/login', { method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }) });
+      if (!res.ok) { err.textContent = 'Неверная почта или пароль'; return; }
+      await init();
+    } catch {
+      err.textContent = 'Сервер не отвечает';
+    }
+  });
+
+  $<HTMLElement>('#logout').addEventListener('click', async () => {
+    await api('/logout', { method: 'POST' }).catch(() => {});
+    me = null;
+    renderAuth();
+  });
+
+  document.querySelectorAll<HTMLElement>('.cab__tab').forEach((tab) => {
+    tab.addEventListener('click', () => openPanel(tab.dataset.panel!));
+  });
+
+  ['#f-status', '#f-source', '#f-q'].forEach((sel) => {
+    const el = $<HTMLElement>(sel);
+    // На поиске — дебаунс. Без него каждый символ это запрос, и на медленной сети список дёргается
+    let t: number | undefined;
+    el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(loadLeads, sel === '#f-q' ? 350 : 0) as unknown as number; });
+  });
+
+  $<HTMLFormElement>('#media-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const err = $<HTMLElement>('#media-err');
+    err.textContent = '';
+    const fd = new FormData(form);
+    if (!(fd.get('alt') as string)?.trim()) { err.textContent = 'Подпись обязательна: без неё фото не пройдёт по SEO'; return; }
+    const res = await api('/media', { method: 'POST', body: fd });
+    if (!res.ok) { err.textContent = `Не загрузилось: ${res.error ?? 'ошибка'}`; return; }
+    form.reset();
+    loadMedia();
+  });
+
+  $<HTMLElement>('#stats-refresh').addEventListener('click', async () => {
+    const out = $<HTMLElement>('#stats-out');
+    out.textContent = 'Тянем Метрику…';
+    const res = await api('/stats/refresh', { method: 'POST' });
+    out.textContent = JSON.stringify(res.data, null, 2);
+  });
+
+  // Старт: узнаём, кто мы, и рисуем нужное
+  async function init() {
+    const res = await api('/me').catch(() => ({ ok: false }));
+    me = res.ok ? res.user : null;
+    renderAuth();
+  }
+  init();
+</script>
