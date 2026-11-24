@@ -106,6 +106,26 @@ db.exec(`
   );
 `);
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Доводим leads до рабочей таблицы: заявка с сайта — это только начало.
+//  Дальше её надо превратить в сделку: объект, сумма, кто ведёт, когда менялась.
+//  ALTER TABLE ADD COLUMN в SQLite безопасен для непустой базы: старые строки получат NULL,
+//  и повторный запуск не упадёт (ошибку «duplicate column» глушим — это идемпотентная миграция)
+// ─────────────────────────────────────────────────────────────────────────────
+const leadColumns = [
+  ['object', 'TEXT'],            // объект: ЖК, адрес, название — по нему ищут и группируют
+  ['amount', 'INTEGER'],         // сумма сделки в рублях. Копейки в заявках не нужны
+  ['assigned_to', 'TEXT'],       // чей клиент. Пусто — значит никто не взял, и это видно в фильтре
+  ['updated_at', 'TEXT'],        // когда последний раз трогали: по нему сортировка «свежие сверху»
+];
+for (const [col, type] of leadColumns) {
+  try {
+    db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
+  } catch {
+    // колонка уже есть — нормальный случай на второй и последующих запусках
+  }
+}
+
 const now = () => new Date().toISOString();
 
 // ---------- Пароли ----------
@@ -199,6 +219,68 @@ export const adminRoutes = {
 
   // ---------- Заявки (HR + admin) ----------
 
+  // POST /api/admin/leads — завести заявку руками.
+  // Нужно, когда клиент позвонил, а не заполнил форму: иначе такие обращения живут
+  // в блокноте и в CRM их просто нет
+  async 'POST /api/admin/leads'(req, res) {
+    const user = requireRole(req, res, ['hr', 'marketing']);
+    if (!user) return;
+    const b = await readJson(req);
+    if (!b.name || !b.contact) return json(res, 400, { ok: false, error: 'name_and_contact_required' });
+
+    const clip = (v, n) => (v == null ? null : String(v).slice(0, n));
+    const id = randomUUID();
+    db.prepare(`INSERT INTO leads (id, created_at, updated_at, source, name, contact, payload, status, comment, object, amount, assigned_to)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(
+        id, now(), now(),
+        'manual',                                  // отдельный источник: сразу видно, что завёл человек
+        clip(b.name, 200) ?? '',
+        clip(b.contact, 200) ?? '',
+        JSON.stringify({ manual: true, by: user.email }),
+        'new',
+        clip(b.comment, 4000),
+        clip(b.object, 300),
+        Number.isFinite(Number(b.amount)) && Number(b.amount) > 0 ? Math.round(Number(b.amount)) : null,
+        clip(b.assigned_to, 120) ?? user.email,
+      );
+    return json(res, 201, { ok: true, id });
+  },
+
+  // DELETE /api/admin/leads/:id — удаление только для админа.
+  // Это персональные данные: менеджеру давать кнопку «стереть заявку» нельзя,
+  // иначе пропадёт след обращения, а по 152-ФЗ его надо хранить и уметь показать
+  async 'DELETE /api/admin/leads/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['admin']);
+    if (!user) return;
+    const hit = db.prepare('DELETE FROM leads WHERE id = ?').run(params.id);
+    if (!hit.changes) return json(res, 404, { ok: false, error: 'not_found' });
+    return json(res, 200, { ok: true });
+  },
+
+  // GET /api/admin/leads/export — выгрузка CSV для Excel.
+  // Разделитель «;» и BOM в начале: без этого русский Excel открывает файл одной колонкой
+  // и с кракозябрами вместо кириллицы. Проверено на живых людях
+  async 'GET /api/admin/leads/export'(req, res, url) {
+    const user = requireRole(req, res, ['hr', 'marketing']);
+    if (!user) return;
+    const rows = db.prepare(`SELECT created_at, source, name, contact, object, status, amount, assigned_to, comment
+                             FROM leads ORDER BY COALESCE(updated_at, created_at) DESC`).all();
+    const head = ['Дата', 'Источник', 'Имя', 'Контакт', 'Объект', 'Статус', 'Сумма', 'Ответственный', 'Заметка'];
+    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;  // кавычки внутри поля удваиваем
+    const csv = [head, ...rows.map((r) => [r.created_at, r.source, r.name, r.contact, r.object,
+      r.status, r.amount, r.assigned_to, r.comment])]
+      .map((line) => line.map(cell).join(';')).join('\r\n');
+
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="leads.csv"',
+      // no-store: в файле персданные, кэшировать его в браузере или прокси нельзя
+      'Cache-Control': 'no-store',
+    });
+    return res.end('\uFEFF' + csv);
+  },
+
   // GET /api/admin/counters — только цифры для бейджей на вкладках.
   // Отдельная ручка, потому что кабинет опрашивает её по таймеру: тянуть за собой полные
   // списки заявок на каждый тик — это мегабайты впустую
@@ -228,13 +310,17 @@ export const adminRoutes = {
     const args = [];
     if (status) { where.push('status = ?'); args.push(status); }
     if (source) { where.push('source = ?'); args.push(source); }
-    if (q) { where.push('(name LIKE ? OR contact LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
+    // Ищем и по объекту: менеджер помнит «тот ЖК на Ярославке», а не фамилию
+    if (q) { where.push('(name LIKE ? OR contact LIKE ? OR object LIKE ?)'); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
     // payload тянем в список, а не отдельной ручкой: заявок десятки, не тысячи, и лишний круг
     // до сервера на каждый клик по карточке тут дороже, чем 30 лишних килобайт в ответе.
     // ip_hash наружу отдаём, потому что по нему ловятся дубли и спам с одной машины
-    const sql = `SELECT id, created_at, source, name, contact, status, comment, page, payload, ip_hash, user_agent
+    // Сортировка по updated_at, а не created_at: в таблице важно, что двигалось последним.
+    // COALESCE — потому что у старых строк updated_at пустой после миграции
+    const sql = `SELECT id, created_at, updated_at, source, name, contact, status, comment, page,
+                        payload, ip_hash, user_agent, object, amount, assigned_to
                  FROM leads ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-                 ORDER BY created_at DESC LIMIT ?`;
+                 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`;
     args.push(limit);
     return json(res, 200, { ok: true, items: db.prepare(sql).all(...args) });
   },
@@ -243,12 +329,44 @@ export const adminRoutes = {
   async 'PATCH /api/admin/leads/:id'(req, res, url, params) {
     // Роли те же, что у вкладки заявок в кабинете. Иначе маркетинг видит список, но не может
     // отметить спам — самая частая операция именно там
-    if (!requireRole(req, res, ['hr', 'marketing'])) return;
+    const user = requireRole(req, res, ['hr', 'marketing']);
+    if (!user) return;
     const b = await readJson(req);
+
     const allowed = ['new', 'in_progress', 'archived', 'spam'];
     if (b.status && !allowed.includes(b.status)) return json(res, 400, { ok: false, error: 'bad_status' });
-    db.prepare('UPDATE leads SET status = COALESCE(?, status), comment = COALESCE(?, comment) WHERE id = ?')
-      .run(b.status ?? null, b.comment ?? null, params.id);
+
+    // Сумма приходит из input type=number — это может быть строка, пустая строка или мусор.
+    // В базу пускаем только конечное неотрицательное число, иначе в отчётах появится NaN
+    let amount = null;
+    if (b.amount !== undefined && b.amount !== null && b.amount !== '') {
+      const n = Number(String(b.amount).replace(/\s/g, '').replace(',', '.'));
+      if (!Number.isFinite(n) || n < 0) return json(res, 400, { ok: false, error: 'bad_amount' });
+      amount = Math.round(n);
+    } else if (b.amount === '') {
+      amount = 0;
+    }
+
+    // Обрезаем длину: поле ввода не должно уметь положить в базу мегабайт текста
+    const clip = (v, n) => (v === undefined || v === null ? null : String(v).slice(0, n));
+
+    db.prepare(`UPDATE leads SET
+        status      = COALESCE(?, status),
+        comment     = COALESCE(?, comment),
+        object      = COALESCE(?, object),
+        amount      = COALESCE(?, amount),
+        assigned_to = COALESCE(?, assigned_to),
+        updated_at  = ?
+      WHERE id = ?`)
+      .run(
+        b.status ?? null,
+        clip(b.comment, 4000),
+        clip(b.object, 300),
+        amount,
+        clip(b.assigned_to, 120),
+        now(),
+        params.id,
+      );
     return json(res, 200, { ok: true });
   },
 
