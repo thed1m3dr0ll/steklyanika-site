@@ -68,20 +68,65 @@ import Base from '../../layouts/Base.astro';
           <button class="cab__tab" data-panel="stats" data-roles="marketing">Статистика</button>
         </nav>
 
-        <!-- БЛОК 3. Заявки с сайта — доска по статусам -->
+        <!-- БЛОК 3. Заявки — таблица с фильтрами. Канбан пробовали, не зашёл:
+             менеджеру нужен список, сортировка по сумме и выгрузка, а не карточки -->
         <section class="cab__panel" data-panel="leads">
           <div class="cab__bar">
-            <input id="f-q" type="search" placeholder="Имя или контакт" />
+            <input id="f-q" type="search" placeholder="Имя, контакт или объект" />
+            <select id="f-status">
+              <option value="">Все статусы</option>
+              <option value="new">Новые</option>
+              <option value="in_progress">В работе</option>
+              <option value="archived">Архив</option>
+              <option value="spam">Спам</option>
+            </select>
             <select id="f-source">
-              <option value="">Все формы</option>
+              <option value="">Все источники</option>
               <option value="modal">Окно заявки</option>
               <option value="quiz">Квиз</option>
               <option value="contacts">Контакты</option>
               <option value="resume">Резюме</option>
+              <option value="manual">Заведена вручную</option>
             </select>
-            <p class="cab__hint cab__hint--inline">Перетащите карточку в другую колонку, чтобы сменить статус</p>
+            <button class="cab__btn" id="lead-add" type="button">Добавить заявку</button>
+            <a class="cab__btn cab__btn--ghost" id="lead-export" href="/api/admin/leads/export">Выгрузить в Excel</a>
           </div>
-          <div class="cab__board" id="board-leads" data-kind="leads"></div>
+
+          <!-- Форма ручного добавления. Скрыта по умолчанию: телефонный звонок — не повод
+               держать пустую форму на экране -->
+          <form class="cab__newlead" id="newlead" hidden>
+            <input name="name" placeholder="Имя клиента" required />
+            <input name="contact" placeholder="Телефон или почта" required />
+            <input name="object" placeholder="Объект" />
+            <input name="amount" type="number" min="0" step="1000" placeholder="Сумма, ₽" />
+            <select name="status">
+              <option value="new">Новая</option>
+              <option value="in_progress">В работе</option>
+            </select>
+            <textarea name="comment" rows="2" placeholder="Примечание"></textarea>
+            <div class="cab__newlead-actions">
+              <button class="cab__btn" type="submit">Сохранить</button>
+              <button class="cab__btn cab__btn--ghost" type="button" id="newlead-cancel">Отмена</button>
+            </div>
+          </form>
+
+          <div class="cab__tablewrap">
+            <table class="cab__table" id="leads-table">
+              <thead>
+                <tr>
+                  <th data-sort="created_at">Дата</th>
+                  <th data-sort="name">Клиент</th>
+                  <th data-sort="object">Объект</th>
+                  <th data-sort="amount">Сумма</th>
+                  <th data-sort="status">Статус</th>
+                  <th data-sort="assigned_to">Ответственный</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="leads-body"><tr><td colspan="7" class="cab__td-empty">Загрузка…</td></tr></tbody>
+            </table>
+          </div>
+          <p class="cab__hint" id="leads-sum"></p>
         </section>
 
         <!-- БЛОК 4. Отклики на вакансии — та же доска, другой набор статусов -->
@@ -215,6 +260,47 @@ import Base from '../../layouts/Base.astro';
     padding: 4px 6px; }
   .cab__card-old { border-left: 3px solid #b03030; }
 
+  /* ---------- таблица заявок ---------- */
+  .cab__tablewrap { overflow-x: auto; background: #fff; border: 1px solid #e3e7e5; border-radius: 12px; }
+  .cab__table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .cab__table th { text-align: left; padding: 11px 12px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .04em; color: #6b7673; border-bottom: 1px solid #e3e7e5; white-space: nowrap;
+    background: #fbfcfc; position: sticky; top: 0; z-index: 1; }
+  /* Кликбельная сортировка: стрелку рисуем псевдоэлементом, чтобы не тащить иконки */
+  .cab__table th[data-sort] { cursor: pointer; user-select: none; }
+  .cab__table th[data-sort]:hover { color: #3d4a47; }
+  .cab__table th.is-sorted::after { content: ' ↓'; color: #3d4a47; }
+  .cab__table th.is-sorted-asc::after { content: ' ↑'; color: #3d4a47; }
+  .cab__table td { padding: 8px 12px; border-bottom: 1px solid #f0f3f2; vertical-align: middle; }
+  .cab__table tr:last-child td { border-bottom: 0; }
+  .cab__table tr:hover td { background: #fafbfb; }
+  /* Поле внутри ячейки выглядит как текст, пока в него не встали.
+     Так таблица не похожа на форму из сотни инпутов, но править можно прямо здесь */
+  .cab__cell { width: 100%; box-sizing: border-box; border: 1px solid transparent; background: transparent;
+    padding: 6px 8px; border-radius: 6px; font: inherit; color: inherit; }
+  .cab__cell:hover { border-color: #e3e7e5; background: #fff; }
+  .cab__cell:focus { outline: 0; border-color: #3d4a47; background: #fff; }
+  .cab__cell--num { max-width: 120px; text-align: right; }
+  /* Подсветка сохранения: без неё непонятно, ушло ли изменение на сервер */
+  .cab__cell--saved { border-color: #2c6e5a !important; background: #eef7f2 !important; }
+  .cab__cell--err { border-color: #b03030 !important; background: #fdecec !important; }
+  .cab__cell-sub { font-size: 12px; color: #8b9591; padding: 0 8px; }
+  .cab__td-date { color: #6b7673; white-space: nowrap; font-size: 13px; }
+  .cab__td-actions { white-space: nowrap; text-align: right; }
+  .cab__td-empty { text-align: center; color: #8b9591; padding: 32px 12px !important; }
+  .cab__icon { border: 1px solid #e3e7e5; background: #fff; border-radius: 6px; width: 28px; height: 28px;
+    cursor: pointer; font-size: 15px; line-height: 1; color: #3d4a47; }
+  .cab__icon:hover { background: #eef1f0; }
+  .cab__icon--del:hover { background: #fdecec; color: #b03030; border-color: #f0c8c8; }
+
+  /* форма ручного добавления */
+  .cab__newlead { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
+    background: #fff; border: 1px solid #e3e7e5; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .cab__newlead input, .cab__newlead select, .cab__newlead textarea { padding: 10px 12px;
+    border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
+  .cab__newlead textarea { grid-column: 1 / -1; font-family: inherit; }
+  .cab__newlead-actions { grid-column: 1 / -1; display: flex; gap: 10px; }
+
   .cab__hint { color: #6b7673; font-size: 14px; margin: 0 0 16px; }
   .cab__hint--inline { margin: 0; }
   .cab__warn { color: #8a6d1f; background: #fdf7e3; padding: 10px 12px; border-radius: 8px;
@@ -347,13 +433,9 @@ import Base from '../../layouts/Base.astro';
   //  Массив items перерисовывается целиком — заявок десятки, дешевле перерисовать,
   //  чем возиться с точечным перемещением узлов и рассинхроном.
   // ─────────────────────────────────────────────────────────────────────────────
+  // Заявки перешли на таблицу, канбан остался только у откликов:
+  // их мало и они реально текут по стадиям, а заявкам нужен список с суммой и выгрузкой
   const COLUMNS = {
-    leads: [
-      { id: 'new', title: 'Новые' },
-      { id: 'in_progress', title: 'В работе' },
-      { id: 'archived', title: 'Архив' },
-      { id: 'spam', title: 'Спам' },
-    ],
     apps: [
       { id: 'new', title: 'Новые' },
       { id: 'screened', title: 'Просмотрен' },
@@ -370,16 +452,7 @@ import Base from '../../layouts/Base.astro';
   let leads: any[] = [];
   let apps: any[] = [];
 
-  function cardHTML(item: any, kind: 'leads' | 'apps') {
-    if (kind === 'leads') {
-      const stale = item.status === 'new' && isStale(item.created_at);
-      return `<article class="cab__card${stale ? ' cab__card-old' : ''}" draggable="true" data-id="${esc(item.id)}">
-        <div class="cab__card-name">${esc(item.name) || 'Без имени'}</div>
-        <div class="cab__card-contact">${esc(item.contact) || '—'}</div>
-        <div class="cab__card-meta">${fmt(item.created_at)} · ${esc(item.source)}</div>
-        ${item.comment ? `<div class="cab__card-note">${esc(item.comment)}</div>` : ''}
-      </article>`;
-    }
+  function cardHTML(item: any) {
     const vac = item.vacancy_slug ? ` · ${esc(item.vacancy_slug)}` : '';
     return `<article class="cab__card" draggable="true" data-id="${esc(item.id)}">
       <div class="cab__card-name">${esc(item.name) || 'Без имени'}</div>
@@ -388,25 +461,24 @@ import Base from '../../layouts/Base.astro';
     </article>`;
   }
 
-  function drawBoard(kind: 'leads' | 'apps') {
-    const items = kind === 'leads' ? leads : apps;
-    const board = $<HTMLElement>(kind === 'leads' ? '#board-leads' : '#board-apps');
-    board.innerHTML = COLUMNS[kind].map((col) => {
-      const inCol = items.filter((i) => i.status === col.id);
+  function drawBoard() {
+    const board = $<HTMLElement>('#board-apps');
+    board.innerHTML = COLUMNS.apps.map((col) => {
+      const inCol = apps.filter((i) => i.status === col.id);
       const cards = inCol.length
-        ? inCol.map((i) => cardHTML(i, kind)).join('')
+        ? inCol.map((i) => cardHTML(i)).join('')
         : `<p class="cab__hint cab__hint--inline">Пусто</p>`;
       return `<div class="cab__col" data-status="${col.id}">
         <div class="cab__col-head"><span>${col.title}</span><span class="cab__col-n">${inCol.length}</span></div>
         <div class="cab__cards">${cards}</div>
       </div>`;
     }).join('');
-    wireBoard(kind);
+    wireBoard();
   }
 
   // Перетаскивание: нативный HTML5 drag&drop. Тянуть библиотеку на четыре колонки — оверкилл
-  function wireBoard(kind: 'leads' | 'apps') {
-    const board = $<HTMLElement>(kind === 'leads' ? '#board-leads' : '#board-apps');
+  function wireBoard() {
+    const board = $<HTMLElement>('#board-apps');
     let draggedId: string | null = null;
 
     board.querySelectorAll<HTMLElement>('.cab__card').forEach((card) => {
@@ -417,8 +489,8 @@ import Base from '../../layouts/Base.astro';
       card.addEventListener('dragend', () => card.classList.remove('is-drag'));
       // Клик без перетаскивания открывает карточку. У откликов — резюме, у заявок — все поля формы
       card.addEventListener('click', () => {
-        const item = (kind === 'leads' ? leads : apps).find((i) => i.id === card.dataset.id);
-        if (item) openCard(item, kind);
+        const item = apps.find((i) => i.id === card.dataset.id);
+        if (item) openCard(item, 'apps');
       });
     });
 
@@ -430,21 +502,20 @@ import Base from '../../layouts/Base.astro';
         col.classList.remove('is-over');
         if (!draggedId) return;
         const status = col.dataset.status!;
-        const list = kind === 'leads' ? leads : apps;
-        const item = list.find((i) => i.id === draggedId);
+        const item = apps.find((i) => i.id === draggedId);
         if (!item || item.status === status) return;
 
         // Оптимистично двигаем в памяти и перерисовываем сразу: ждать сеть на каждом
         // перетаскивании — это задержка, из-за которой кажется, что drag&drop не работает
         const prev = item.status;
         item.status = status;
-        drawBoard(kind);
+        drawBoard();
         try {
-          await api(`/${kind}/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+          await api(`/applications/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
           refreshCounters();
         } catch {
           item.status = prev; // сеть отвалилась — возвращаем как было, иначе интерфейс врёт
-          drawBoard(kind);
+          drawBoard();
         }
         draggedId = null;
       });
@@ -506,23 +577,140 @@ import Base from '../../layouts/Base.astro';
       await api(`/leads/${item.id}`, { method: 'PATCH', body: JSON.stringify({ comment }) });
       item.comment = comment;
       sheet.hidden = true;
-      drawBoard('leads');
+      loadLeads();
     });
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
   //  ЗАГРУЗКА ДАННЫХ
   // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  ТАБЛИЦА ЗАЯВОК. Список, а не карточки: нужны сортировка по сумме, выгрузка
+  //  и правка на месте. Сортировку держим на клиенте — заявок десятки, тянуть её
+  //  на сервер запросом с ORDER BY смысла нет, а фильтр по статусу всё равно уходит в SQL
+  // ─────────────────────────────────────────────────────────────────────────────
+  const STATUS_RU: Record<string, string> = {
+    new: 'Новая', in_progress: 'В работе', archived: 'Архив', spam: 'Спам',
+  };
+  let sortKey = 'created_at';
+  let sortDir: 1 | -1 = -1;
+
+  const money = (v: unknown) =>
+    v == null || v === '' ? '—' : Number(v).toLocaleString('ru-RU') + ' ₽';
+
+  // value — то, что подставляем в input, data-атрибут — то, что читаем при сохранении.
+  // Разделяем намеренно: экранирование одно, но в атрибут нельзя тащить кавычки
+  function leadRow(l: any) {
+    const badge = l.status === 'new' ? ' cab__badge--new' : '';
+    return `<tr data-id="${esc(l.id)}">
+      <td class="cab__td-date">${fmt(l.created_at)}</td>
+      <td>
+        <input class="cab__cell" data-field="name" value="${esc(l.name)}" />
+        <div class="cab__cell-sub">${esc(l.contact)} · ${esc(l.source)}</div>
+      </td>
+      <td><input class="cab__cell" data-field="object" value="${esc(l.object ?? '')}" placeholder="—" /></td>
+      <td><input class="cab__cell cab__cell--num" data-field="amount" type="number" min="0" step="1000"
+                 value="${l.amount ?? ''}" placeholder="—" /></td>
+      <td>
+        <select class="cab__cell" data-field="status">
+          ${Object.entries(STATUS_RU).map(([k, t]) =>
+            `<option value="${k}"${l.status === k ? ' selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </td>
+      <td><input class="cab__cell" data-field="assigned_to" value="${esc(l.assigned_to ?? '')}" placeholder="—" /></td>
+      <td class="cab__td-actions">
+        ${l.status === 'new' ? `<span class="cab__badge${badge}">новая</span>` : ''}
+        <button class="cab__icon" data-open="${esc(l.id)}" title="Все поля заявки" type="button">⋯</button>
+        ${me?.role === 'admin' ? `<button class="cab__icon cab__icon--del" data-del="${esc(l.id)}" title="Удалить" type="button">×</button>` : ''}
+      </td>
+    </tr>`;
+  }
+
   async function loadLeads() {
     const q = $<HTMLInputElement>('#f-q').value.trim();
+    const status = $<HTMLSelectElement>('#f-status').value;
     const source = $<HTMLSelectElement>('#f-source').value;
     const params = new URLSearchParams();
     if (q) params.set('q', q);
+    if (status) params.set('status', status);
     if (source) params.set('source', source);
 
     const { items } = await api<any>(`/leads?${params}`).catch(() => ({ items: [] }));
     leads = items;
-    drawBoard('leads');
+    drawLeads();
+  }
+
+  function drawLeads() {
+    const body = $<HTMLElement>('#leads-body');
+    if (!leads.length) {
+      body.innerHTML = `<tr><td colspan="7" class="cab__td-empty">Заявок нет. Измените фильтры или добавьте вручную.</td></tr>`;
+      $<HTMLElement>('#leads-sum').textContent = '';
+      return;
+    }
+    // Копию сортируем, чтобы не переставлять исходный массив: по нему работает поиск карточки
+    const sorted = [...leads].sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      if (x == null) return 1;          // пустые всегда вниз, независимо от направления
+      if (y == null) return -1;
+      const cmp = typeof x === 'number' && typeof y === 'number'
+        ? x - y
+        : String(x).localeCompare(String(y), 'ru');
+      return cmp * sortDir;
+    });
+    body.innerHTML = sorted.map(leadRow).join('');
+
+    // Итог по сумме — по отфильтрованному списку, не по всей базе: иначе цифра не бьётся с тем, что видно
+    const total = leads.reduce((acc, l) => acc + (Number(l.amount) || 0), 0);
+    $<HTMLElement>('#leads-sum').textContent =
+      `Заявок: ${leads.length}. Сумма: ${total.toLocaleString('ru-RU')} ₽`;
+    wireLeads();
+  }
+
+  function wireLeads() {
+    const body = $<HTMLElement>('#leads-body');
+
+    // Правка на месте: любое изменение поля уходит на сервер сразу.
+    // Кнопку «сохранить» на каждую строку не ставим — менеджер забудет её нажать,
+    // и данные разойдутся с тем, что он видит
+    body.querySelectorAll<HTMLInputElement | HTMLSelectElement>('.cab__cell').forEach((el) => {
+      el.addEventListener('change', async () => {
+        const tr = el.closest('tr')!;
+        const field = el.dataset.field!;
+        const raw = el.value;
+        // Пустую сумму отправляем нулём: сервер поймёт, что поле очистили
+        const value = field === 'amount' ? (raw === '' ? '' : Number(raw)) : raw;
+        try {
+          await api(`/leads/${tr.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) });
+          const item = leads.find((l) => l.id === tr.dataset.id);
+          if (item) item[field] = value;
+          el.classList.add('cab__cell--saved');
+          setTimeout(() => el.classList.remove('cab__cell--saved'), 900);
+          // Статус мог смениться — пересчитываем итог и бейджи
+          if (field === 'status' || field === 'amount') drawLeads();
+          refreshCounters();
+        } catch {
+          el.classList.add('cab__cell--err');
+          setTimeout(() => el.classList.remove('cab__cell--err'), 1500);
+        }
+      });
+    });
+
+    body.querySelectorAll<HTMLElement>('[data-open]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const item = leads.find((l) => l.id === btn.dataset.open);
+        if (item) openCard(item, 'leads');
+      });
+    });
+
+    body.querySelectorAll<HTMLElement>('[data-del]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        // Подтверждение обязательно: удаление заявки необратимо и это персданные
+        if (!confirm('Удалить заявку безвозвратно?')) return;
+        await api(`/leads/${btn.dataset.del}`, { method: 'DELETE' }).catch(() => {});
+        loadLeads();
+        refreshCounters();
+      });
+    });
   }
 
   async function loadApps() {
@@ -531,7 +719,7 @@ import Base from '../../layouts/Base.astro';
     if (vacancy) params.set('vacancy', vacancy);
     const { items } = await api<any>(`/applications?${params}`).catch(() => ({ items: [] }));
     apps = items;
-    drawBoard('apps');
+    drawBoard();
   }
 
   async function loadVacancyFilter() {
@@ -706,12 +894,46 @@ import Base from '../../layouts/Base.astro';
 
   // Поиск с задержкой: без неё каждый символ — запрос к серверу
   let timer: number | undefined;
-  ['#f-q', '#f-source'].forEach((sel) => {
+  ['#f-q', '#f-status', '#f-source'].forEach((sel) => {
     $(sel).addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(loadLeads, sel === '#f-q' ? 350 : 0) as unknown as number;
     });
   });
+  // Сортировка по клику на заголовок. Третий клик возвращает исходный порядок по дате —
+  // иначе человек не понимает, как вернуться «как было»
+  $$('#leads-table th[data-sort]').forEach((th) => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort!;
+      if (sortKey === key) sortDir = sortDir === -1 ? 1 : -1;
+      else { sortKey = key; sortDir = key === 'created_at' || key === 'amount' ? -1 : 1; }
+      $$('#leads-table th[data-sort]').forEach((h) => h.classList.remove('is-sorted', 'is-sorted-asc'));
+      th.classList.add(sortDir === -1 ? 'is-sorted' : 'is-sorted-asc');
+      drawLeads();
+    });
+  });
+
+  // Форма ручного добавления
+  $<HTMLElement>('#lead-add').addEventListener('click', () => {
+    const form = $<HTMLFormElement>('#newlead');
+    form.hidden = !form.hidden;
+    if (!form.hidden) form.querySelector<HTMLInputElement>('[name=name]')!.focus();
+  });
+  $<HTMLElement>('#newlead-cancel').addEventListener('click', () => {
+    $<HTMLFormElement>('#newlead').hidden = true;
+  });
+  $<HTMLFormElement>('#newlead').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const fd = new FormData(form);
+    const body = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ''));
+    await api('/leads', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+    form.reset();
+    form.hidden = true;
+    loadLeads();
+    refreshCounters();
+  });
+
   $<HTMLElement>('#f-vacancy').addEventListener('change', loadApps);
 
   $<HTMLFormElement>('#media-form').addEventListener('submit', async (e) => {
