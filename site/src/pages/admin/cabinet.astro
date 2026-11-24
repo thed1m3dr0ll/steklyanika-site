@@ -293,6 +293,14 @@ export const prerender = true;
 
     /* ─────────── МЕЛОЧИ ─────────── */
     .hint { color: var(--tx-3); font-size: 13px; margin: 0 0 14px; }
+
+    /* Плашка ошибки загрузки. Цвет — не «тревога ради тревоги»: красная полоса тут
+       единственное, что отличает «ничего нет» от «не доехало», и человек не должен
+       вглядываться, чтобы это понять */
+    .errbox { background: var(--bad-soft, rgba(220,38,38,.07)); border: 1px solid rgba(220,38,38,.28);
+      border-radius: var(--r-card); padding: 16px 18px; }
+    .errbox b { display: block; margin-bottom: 4px; color: var(--bad); }
+    .errbox .hint { margin: 0 0 12px; }
     .warn { color: var(--warn); background: var(--accent-soft); border-radius: 9px; padding: 11px 13px;
       font-size: 12.5px; margin: 12px 0 0; }
     .sumline { color: var(--tx-2); font-size: 13px; margin-top: 12px; }
@@ -773,14 +781,37 @@ export const prerender = true;
     if (q) p.set('q', q);
     if (st) p.set('status', st);
     if (src) p.set('source', src);
-    const res = await api('/leads?' + p.toString()).catch(() => ({ items: [] }));
-    cache.leads = res.items || [];
+    // Ошибку НЕ превращаем в пустой список. Раньше здесь стоял .catch(() => ({ items: [] }))
+    // и получалось худшее из возможного: бейдж «2 новые» горит, а таблица пустая — будто
+    // заявки потерялись. Пустой список и упавший запрос должны выглядеть по-разному
+    try {
+      const res = await api('/leads?' + p.toString());
+      if (!res || res.ok === false) throw new Error((res && res.error) || 'bad_response');
+      cache.leads = res.items || [];
+      cache.leadsError = null;
+    } catch (e) {
+      if (String(e && e.message) === 'unauthorized') return;
+      cache.leads = [];
+      cache.leadsError = String((e && e.message) || 'unknown');
+    }
     drawLeads();
   }
 
   function drawLeads() {
     const area = $('#lead-area');
     if (!area) return;
+    // Список не загрузился — говорим прямо и даём кнопку. Молчаливая пустота хуже ошибки:
+    // человек начинает думать, что заявки удалились
+    if (cache.leadsError) {
+      area.innerHTML = `<div class="errbox">
+        <b>Не удалось загрузить заявки.</b>
+        <p class="hint">Ответ сервера: ${esc(cache.leadsError)}. Счётчики при этом живые — данные на месте, упал запрос списка.</p>
+        <button class="btn" type="button" id="lead-retry">Повторить</button>
+      </div>`;
+      const btn = $('#lead-retry');
+      if (btn) btn.addEventListener('click', loadLeads);
+      return;
+    }
     const all = cache.leads || [];
 
     if (leadMode === 'table') {
@@ -1042,10 +1073,12 @@ export const prerender = true;
 
   // ─────────── ОТКЛИКИ (канбан) ───────────
   async function viewApps() {
-    const res = await api('/applications').catch(() => ({ items: [] }));
+    // Падение запроса не рисуем как «откликов нет»: пустой канбан и сломанный запрос — разное
+    const res = await api('/applications').catch((e) => ({ items: [], fail: String((e && e.message) || 'ошибка') }));
     cache.apps = res.items || [];
     const cols = Object.keys(APP_STATUS);
-    $('#content').innerHTML = `<p class="hint">Перетащите карточку, чтобы сменить стадию. Резюме открывается по ссылке.</p>
+    $('#content').innerHTML = `${res.fail ? `<div class="errbox"><b>Не удалось загрузить отклики.</b>
+        <p class="hint">Ответ сервера: ${esc(res.fail)}</p></div>` : ''}<p class="hint">Перетащите карточку, чтобы сменить стадию. Резюме открывается по ссылке.</p>
       <div class="kanban">${cols.map((s) => {
         const inCol = cache.apps.filter((a) => a.status === s);
         return `<div class="kcol" data-status="${s}">
@@ -1151,7 +1184,7 @@ export const prerender = true;
   async function loadSiteVacancies() {
     const box = $('#site-vacancies');
     if (!box) return;
-    const res = await api('/site-vacancies').catch(() => ({ items: [] }));
+    const res = await api('/site-vacancies').catch((e) => ({ items: [], fail: String((e && e.message) || 'ошибка') }));
     const items = res.items || [];
 
     if (res.dirMissing) {
@@ -1159,7 +1192,8 @@ export const prerender = true;
       return;
     }
 
-    box.innerHTML = `<div class="bar">
+    box.innerHTML = `${res.fail ? `<div class="errbox"><b>Не удалось прочитать вакансии сайта.</b>
+        <p class="hint">Ответ сервера: ${esc(res.fail)}. Проверьте, что сервер запущен из корня проекта.</p></div>` : ''}<div class="bar">
         <button class="btn" id="vac-add" type="button">Создать вакансию</button>
         <p class="hint" style="margin:0">Опубликованная вакансия сразу появляется на сайте в разделе «Карьера»</p>
       </div>
@@ -1600,11 +1634,13 @@ export const prerender = true;
 
   // ─────────── ПОЛЬЗОВАТЕЛИ ───────────
   async function viewUsers() {
-    const res = await api('/users').catch(() => ({ items: [] }));
+    const res = await api('/users').catch((e) => ({ items: [], fail: String((e && e.message) || 'ошибка') }));
     cache.users = res.items || [];
     $('#top-actions').innerHTML = '<button class="btn" id="user-add" type="button">Добавить пользователя</button>';
 
     $('#content').innerHTML = `
+      ${res.fail ? `<div class="errbox"><b>Не удалось загрузить пользователей.</b>
+        <p class="hint">Ответ сервера: ${esc(res.fail)}</p></div>` : ''}
       <form class="formbox" id="user-form" hidden>
         <input name="email" type="email" placeholder="Почта" required />
         <input name="name" placeholder="Имя" />
