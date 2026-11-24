@@ -16,9 +16,12 @@
 //
 //  ВАЖНО: страница статическая, данные тянет с /api/admin/*. Ручки проверяют сессию сами.
 //  Не вздумай вшивать данные в HTML при сборке — это утечка персданных в публичный файл.
----
 
+// prerender держим ВНУТРИ шапки. Если оставить его после закрывающего ---,
+// Astro решит, что это обычный текст, и напечатает строку прямо на странице.
+// Именно так и случилось: строка висела в углу кабинета
 export const prerender = true;
+---
 
 <html lang="ru" data-theme="apple">
 <head>
@@ -301,6 +304,25 @@ export const prerender = true;
       border-radius: var(--r-card); padding: 16px 18px; }
     .errbox b { display: block; margin-bottom: 4px; color: var(--bad); }
     .errbox .hint { margin: 0 0 12px; }
+
+    /* Статистика: три карточки в ряд, на узком экране — в столбик */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+    .sc-card { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      box-shadow: var(--sh-card); padding: 16px 18px; }
+    .sc-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+    .sc-badge { width: 26px; height: 26px; border-radius: 8px; color: #fff; display: grid; place-items: center;
+      font-size: 11px; font-weight: 700; letter-spacing: -.02em; flex: none; }
+    .sc-title { font-weight: 600; font-size: 14px; }
+    .sc-when { margin-left: auto; font-size: 11px; color: var(--tx-3); }
+    .sc-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 12px; }
+    .sc-fact span { display: block; font-size: 11px; color: var(--tx-3); }
+    .sc-fact b { font-size: 16px; font-variant-numeric: tabular-nums; }
+    .sc-chart { margin: 0 -4px; }
+    /* Отключённый источник: приглушённый фон, чтобы не путался с рабочим */
+    .stat-off { margin: 8px 0 8px; font-size: 13px; color: var(--tx-2); background: var(--bg-surface-3);
+      border-radius: 9px; padding: 9px 11px; }
+    .sc-card code, .errbox code { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg-surface-3);
+      padding: 1px 5px; border-radius: 5px; }
     .warn { color: var(--warn); background: var(--accent-soft); border-radius: 9px; padding: 11px 13px;
       font-size: 12.5px; margin: 12px 0 0; }
     .sumline { color: var(--tx-2); font-size: 13px; margin-top: 12px; }
@@ -1619,17 +1641,109 @@ export const prerender = true;
   }
 
   // ─────────── СТАТИСТИКА ───────────
+  // Три источника: Метрика, Google Ads, ВКонтакте. Показываем то, что реально пришло.
+  // Ключей нет — карточка честно говорит об этом и перечисляет нужные переменные.
+  // Нарисовать красивые нули было бы проще, но тогда никто не узнает, что данные не идут
+  const STAT_META = {
+    ym: { title: 'Яндекс.Метрика', char: 'Я', color: '#FC3F1D', unit: 'визитов' },
+    gads: { title: 'Google Ads', char: 'G', color: '#34A853', unit: '₽ расход' },
+    vk: { title: 'ВКонтакте', char: 'VK', color: '#0077FF', unit: 'подписчиков' },
+  };
+
+  function statSeries(s) {
+    const arr = (s.series || []).map((d) => Number(d.value) || 0);
+    // Ряд из одних нулей рисуется как прямая по нижнему краю — это выглядит как ошибка.
+    // Поднимаем на единицу, чтобы линия была ровной, но видимой
+    return arr.some((v) => v > 0) ? arr : arr.map(() => 1);
+  }
+
+  function statFacts(key, s) {
+    // Ответ старый или неполный — не роняем экран в белый. Недостающее показываем прочерком
+    const t = s.totals || {};
+    const n = (v, tail) => (v === null || v === undefined || Number.isNaN(Number(v)))
+      ? '—' : Number(v).toLocaleString('ru-RU') + (tail || '');
+    if (key === 'ym') return [
+      ['Визиты', n(t.visits)],
+      ['Посетители', n(t.users)],
+      ['Просмотры', n(t.pageviews)],
+      ['Отказы', t.bounce === undefined ? '—' : t.bounce + '%'],
+    ];
+    if (key === 'gads') return [
+      ['Расход', n(t.cost, ' ₽')],
+      ['Клики', n(t.clicks)],
+      ['Показы', n(t.impressions)],
+      ['Цена клика', n(t.cpc, ' ₽')],
+    ];
+    return [
+      ['Подписчики', n(t.members)],
+      ['Охват за 30 дней', s.reachMissing ? '—' : n(t.reach)],
+      ['Охват в день', s.reachMissing ? '—' : n(t.reachAvg)],
+      ['Сообщество', s.group || '—'],
+    ];
+  }
+
+  function statCard(key, box) {
+    const m = STAT_META[key];
+    const s = box && box.data;
+    const head = `<div class="sc-head">
+        <span class="sc-badge" style="background:${m.color}">${m.char}</span>
+        <span class="sc-title">${m.title}</span>
+        ${s && box.fetched_at ? `<span class="sc-when">${esc(fmtDate(box.fetched_at))}</span>` : ''}
+      </div>`;
+
+    if (!s) {
+      return `<div class="sc-card">${head}
+        <p class="hint" style="margin:12px 0 6px">Данных ещё нет — обновите кнопкой сверху.</p></div>`;
+    }
+    if (!s.ok) {
+      const need = (s.need || []).map((n) => `<code>${esc(n)}</code>`).join(', ');
+      return `<div class="sc-card">${head}
+        <p class="stat-off">${esc(s.hint || s.error || 'источник отключён')}</p>
+        ${need ? `<p class="hint" style="margin:0">В <code>.env</code> нужны: ${need}</p>` : ''}</div>`;
+    }
+    const facts = statFacts(key, s).map(([k, v]) => `
+      <div class="sc-fact"><span>${k}</span><b>${esc(v)}</b></div>`).join('');
+    return `<div class="sc-card">${head}
+      <div class="sc-facts">${facts}</div>
+      <div class="sc-chart">${sparkline(statSeries(s), m.color, 400, 80)}</div>
+      <p class="hint" style="margin:6px 0 0">${esc(s.period || '')}${
+        s.counter ? ' · счётчик ' + esc(s.counter) : ''}${
+        s.customer ? ' · ' + esc(s.customer) : ''}</p></div>`;
+  }
+
   async function viewStats() {
-    $('#content').innerHTML = `
-      <p class="hint">Данные из Яндекс.Метрики. Обновляются кнопкой, не на каждый показ — щадим лимиты API.</p>
-      <button class="btn" id="stats-btn" type="button">Обновить данные</button>
-      <pre class="pre" id="stats-out" style="margin-top:16px"></pre>`;
+    $('#top-actions').innerHTML = '<button class="btn" id="stats-btn" type="button">Обновить данные</button>';
+    $('#content').innerHTML = '<div id="stats-cards"><p class="hint">Загрузка…</p></div>';
+    await drawStats();
+
     $('#stats-btn').addEventListener('click', async () => {
-      const out = $('#stats-out');
-      out.textContent = 'Запрашиваю Метрику…';
-      const r = await api('/stats/refresh', { method: 'POST' }).catch(() => null);
-      out.textContent = JSON.stringify(r, null, 2);
+      const btn = $('#stats-btn');
+      btn.disabled = true;
+      btn.textContent = 'Опрашиваю сервисы…';
+      // Три запроса параллельно: последовательно ждать до 45 секунд, если у всех таймаут
+      await Promise.all(['ym', 'gads', 'vk'].map((k) =>
+        api('/stats/refresh?source=' + k, { method: 'POST' }).catch(() => null)));
+      btn.disabled = false;
+      btn.textContent = 'Обновить данные';
+      await drawStats();
+      refreshCounters();
     });
+  }
+
+  async function drawStats() {
+    const box = $('#stats-cards');
+    if (!box) return;
+    const r = await api('/stats').catch((e) => ({ fail: String((e && e.message) || 'ошибка') }));
+    if (r.fail) {
+      box.innerHTML = `<div class="errbox"><b>Не удалось загрузить статистику.</b>
+        <p class="hint">Ответ сервера: ${esc(r.fail)}</p></div>`;
+      return;
+    }
+    const src = r.sources || {};
+    box.innerHTML = '<div class="stats-grid">' +
+      ['ym', 'gads', 'vk'].map((k) => statCard(k, src[k])).join('') + '</div>' +
+      `<p class="hint" style="margin-top:14px">Цифры кэшируются: запросы к сервисам уходят только по кнопке.
+        Лимиты API не резиновые, а дашборд открывают чаще, чем меняются данные.</p>`;
   }
 
   // ─────────── ПОЛЬЗОВАТЕЛИ ───────────
