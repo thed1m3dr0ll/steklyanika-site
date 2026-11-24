@@ -6,14 +6,17 @@
 // Проверка роли — в одном месте (requireRole), чтобы не забыть её на новой ручке. Забытая проверка = дыра.
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join, extname, basename, dirname } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
+import { join, extname, basename, dirname, resolve } from 'node:path';
 import { syncHH, authUrl, exchangeCode, hhStatus } from './hh.mjs';
 import { json, readJson, readMultipart } from './http.mjs';
 
 const DB_PATH = process.env.DB_PATH ?? './data/steklyanika.db';
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? './data/uploads';
 const MEDIA_DIR = process.env.MEDIA_DIR ?? './data/media';
+// Папка вакансий сайта. Админка пишет туда JSON-файлы — их читает сборка Astro
+// (src/data/vacancies.ts). Путь переопределяется, если сайт лежит не рядом с сервером
+const SITE_VACANCIES_DIR = process.env.SITE_VACANCIES_DIR ?? './site/src/content/vacancies';
 const SESSION_TTL = 8 * 3600_000; // 8 часов. Дольше держать сессию в админке с персданными — плохая идея
 
 mkdirSync(MEDIA_DIR, { recursive: true });
@@ -188,6 +191,18 @@ const now = () => new Date().toISOString();
 
 // Журнал действий. Ошибку записи НЕ пробрасываем: если лог упал, это не повод
 // отменять удачную правку заявки. Но и молча глотать не будем — пусть будет в консоли
+// Транслитерация для имён файлов. Копия таблицы из site/src/data/vacancies.ts:
+// если поменять здесь, надо поменять и там, иначе адреса страниц разъедутся
+const LAT = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
+  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
+  х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+};
+function slugifyRu(s) {
+  return [...s.toLowerCase()].map((ch) => (ch in LAT ? LAT[ch] : ch)).join('')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'vacancy';
+}
+
 function logAction(actor, action, target, details) {
   try {
     db.prepare('INSERT INTO audit (id, at, actor, action, target, details) VALUES (?,?,?,?,?,?)')
@@ -727,6 +742,106 @@ export const adminRoutes = {
       ok: true,
       items: db.prepare('SELECT * FROM audit ORDER BY at DESC LIMIT ?').all(limit),
     });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  ВАКАНСИИ САЙТА. Вакансия на сайте — это JSON-файл в src/content/vacancies/.
+  //  Поэтому «создать вакансию» = записать файл, а «снять с публикации» = убрать его.
+  //  Никакой базы тут нет намеренно: сайт собирается статикой, и файл — единственный
+  //  источник правды. Держать вакансии ещё и в SQLite значило бы рассинхрон.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // GET /api/admin/site-vacancies — список файлов как есть, включая неопубликованные
+  async 'GET /api/admin/site-vacancies'(req, res) {
+    if (!requireRole(req, res, ['hr'])) return;
+    if (!existsSync(SITE_VACANCIES_DIR)) return json(res, 200, { ok: true, items: [], dirMissing: true });
+    const items = readdirSync(SITE_VACANCIES_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => {
+        try {
+          const data = JSON.parse(readFileSync(join(SITE_VACANCIES_DIR, f), 'utf8'));
+          return { file: f, ...data };
+        } catch {
+          // Битый JSON не должен ломать весь список: показываем как есть, чтобы человек увидел проблему
+          return { file: f, title: f, broken: true };
+        }
+      })
+      .sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || String(a.title).localeCompare(String(b.title), 'ru'));
+    return json(res, 200, { ok: true, items });
+  },
+
+  // POST /api/admin/site-vacancies — опубликовать вакансию на сайте
+  async 'POST /api/admin/site-vacancies'(req, res) {
+    const user = requireRole(req, res, ['hr']);
+    if (!user) return;
+    const b = await readJson(req);
+    if (!String(b.title ?? '').trim()) return json(res, 400, { ok: false, error: 'title_required' });
+
+    // Имя файла строим из названия. Транслитерация та же, что в site/src/data/vacancies.ts,
+    // иначе адреса страниц разъедутся между админкой и сборкой
+    const slug = slugifyRu(String(b.title));
+    const file = `${slug}.json`;
+    const path = join(SITE_VACANCIES_DIR, file);
+
+    // Не перетираем чужую вакансию молча: лучше пусть человек допишет название
+    if (existsSync(path)) return json(res, 409, { ok: false, error: 'slug_taken', slug });
+
+    const data = {
+      title: String(b.title).trim().slice(0, 160),
+      place: b.place === 'Офис' ? 'Офис' : 'Производство',
+      employment: String(b.employment ?? 'полная занятость').slice(0, 80),
+      experience: String(b.experience ?? '').slice(0, 80),
+      schedule: String(b.schedule ?? '').slice(0, 160),
+      contract: String(b.contract ?? '').slice(0, 160),
+      format: String(b.format ?? '').slice(0, 160),
+      // Списки приходят строкой, по пункту на строку — ровно так их читает lines.ts на сайте
+      duties: String(b.duties ?? '').slice(0, 4000),
+      requirements: String(b.requirements ?? '').slice(0, 4000),
+      conditions: String(b.conditions ?? '').slice(0, 4000),
+      hh: String(b.hh ?? '').trim().slice(0, 300),
+      published: b.published !== false,
+      order: Number.isFinite(Number(b.order)) ? Number(b.order) : 100,
+    };
+
+    mkdirSync(SITE_VACANCIES_DIR, { recursive: true });
+    writeFileSync(path, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    logAction(user.email, 'vacancy.publish', slug, data.title);
+    return json(res, 201, { ok: true, slug, file });
+  },
+
+  // PATCH /api/admin/site-vacancies/:file — снять с публикации или вернуть.
+  // Файл не удаляем: вакансию часто возвращают через месяц, и терять текст глупо
+  async 'PATCH /api/admin/site-vacancies/:file'(req, res, url, params) {
+    const user = requireRole(req, res, ['hr']);
+    if (!user) return;
+    const file = basename(params.file);           // basename отсекает ../ — иначе выйдем из папки
+    if (!file.endsWith('.json')) return json(res, 400, { ok: false, error: 'bad_file' });
+    const path = join(SITE_VACANCIES_DIR, file);
+    if (!existsSync(path)) return json(res, 404, { ok: false, error: 'not_found' });
+
+    const b = await readJson(req);
+    let data;
+    try { data = JSON.parse(readFileSync(path, 'utf8')); }
+    catch { return json(res, 500, { ok: false, error: 'broken_json' }); }
+
+    if (b.published !== undefined) data.published = !!b.published;
+    if (b.order !== undefined) data.order = Number(b.order) || 100;
+    writeFileSync(path, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    logAction(user.email, 'vacancy.update', file, 'published=' + data.published);
+    return json(res, 200, { ok: true });
+  },
+
+  // DELETE — только админ. Удаление файла необратимо, текста больше нигде нет
+  async 'DELETE /api/admin/site-vacancies/:file'(req, res, url, params) {
+    const user = requireRole(req, res, ['admin']);
+    if (!user) return;
+    const file = basename(params.file);
+    if (!file.endsWith('.json')) return json(res, 400, { ok: false, error: 'bad_file' });
+    const path = join(SITE_VACANCIES_DIR, file);
+    if (!existsSync(path)) return json(res, 404, { ok: false, error: 'not_found' });
+    unlinkSync(path);
+    logAction(user.email, 'vacancy.delete', file, null);
+    return json(res, 200, { ok: true });
   },
 
   // GET /api/admin/hh/status — что с подключением, когда последняя синхронизация
