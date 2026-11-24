@@ -179,24 +179,34 @@ const leadColumns = [
   ['assigned_to', 'TEXT'],       // чей клиент. Пусто — значит никто не взял, и это видно в фильтре
   ['updated_at', 'TEXT'],        // когда последний раз трогали: по нему сортировка «свежие сверху»
 ];
-// Прогоняем, пока не останется ни одной отсутствующей колонки. Причина — индексы:
-// CREATE INDEX IF NOT EXISTS idx_leads_* трогает updated_at, и если SQLite споткнётся
-// на нём, то ALTER-ы, стоявшие после индексов, не выполнятся никогда. Раньше здесь был
-// один проход с try/catch — и на живой базе updated_at просто не появлялся: счётчик
-// «2 новые» показывал, а список падал с «no such column». Цикл делает миграцию
-// самовосстанавливающейся: на следующем запуске недостающее всё равно добавится
-for (let pass = 0; pass < 5; pass++) {
-  const have = new Set(db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name));
-  const missing = leadColumns.filter(([col]) => !have.has(col));
-  if (!missing.length) break;
-  for (const [col, type] of missing) {
-    try {
-      db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
-    } catch (e) {
-      console.error('[migrate] leads.' + col, e?.message ?? e);
+// Важно про порядок: этот модуль импортируется в index.mjs СВЕРХУ файла, и весь его
+// код выполняется раньше, чем index.mjs дойдёт до CREATE TABLE leads. На чистой базе
+// таблицы в этот момент ещё нет — первый ALTER падал, и это ловилось только здесь.
+// Поэтому миграция оформлена функцией: index.mjs зовёт её после создания таблиц.
+// Плюс добиваем недостающие колонки запросом в схему, а не перебором «а вдруг упадёт»:
+// CREATE INDEX, стоящий в чужом db.exec, мог оборвать блок на середине
+export function migrateLeads() {
+  try {
+    // На случай, если таблицы нет вовсе — создаём её сами, без индексов.
+    // Так функция работает и когда её позвали до схемы index.mjs
+    db.exec(`CREATE TABLE IF NOT EXISTS leads (
+      id TEXT PRIMARY KEY, created_at TEXT NOT NULL, source TEXT NOT NULL, name TEXT,
+      contact TEXT, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new',
+      comment TEXT, ip_hash TEXT, user_agent TEXT, page TEXT)`);
+    const have = new Set(db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name));
+    for (const [col, type] of leadColumns) {
+      if (have.has(col)) continue;
+      try {
+        db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
+      } catch (e) {
+        console.error('[migrate] leads.' + col, e?.message ?? e);
+      }
     }
+  } catch (e) {
+    console.error('[migrate] leads:', e?.message ?? e);
   }
 }
+migrateLeads();
 
 const now = () => new Date().toISOString();
 
@@ -951,26 +961,56 @@ export const adminRoutes = {
 
   // ---------- Статистика (маркетинг) ----------
 
-  // GET /api/admin/stats — из кэша, обновление отдельной ручкой.
-  // Тянуть Метрику на каждый рендер дашборда = упереться в лимиты к вечеру
-  async 'GET /api/admin/stats'(req, res, url) {
+  // GET /api/admin/stats — всё из кэша, обновление отдельной ручкой.
+  // Тянуть три API на каждый рендер дашборда = упереться в лимиты к вечеру
+  async 'GET /api/admin/stats'(req, res) {
     if (!requireRole(req, res, ['marketing'])) return;
-    const key = url.searchParams.get('key') ?? 'metrika:30d';
-    const row = db.prepare('SELECT value, fetched_at FROM stats_cache WHERE key = ?').get(key);
-    if (!row) return json(res, 200, { ok: true, data: null, hint: 'Кэш пуст. Вызовите POST /api/admin/stats/refresh' });
-    return json(res, 200, { ok: true, data: JSON.parse(row.value), fetched_at: row.fetched_at });
+    const out = {};
+    for (const src of STAT_SOURCES) {
+      const row = db.prepare('SELECT value, fetched_at FROM stats_cache WHERE key = ?').get(src.key);
+      out[src.key] = row ? { data: JSON.parse(row.value), fetched_at: row.fetched_at } : { data: null, fetched_at: null };
+    }
+    return json(res, 200, { ok: true, sources: out });
   },
 
-  // POST /api/admin/stats/refresh — тянет Метрику и Директ, кладёт в кэш
-  async 'POST /api/admin/stats/refresh'(req, res) {
+  // POST /api/admin/stats/refresh — опрашивает источники и кладёт в кэш.
+  // Источники независимы: упавший Google не должен стирать удачную Метрику.
+  // ?source=ym|gads|vk — обновить один, без параметра — все
+  async 'POST /api/admin/stats/refresh'(req, res, url) {
     if (!requireRole(req, res, ['marketing'])) return;
-    const result = await fetchMetrika();
-    db.prepare(`INSERT INTO stats_cache (key, value, fetched_at) VALUES (?,?,?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at`)
-      .run('metrika:30d', JSON.stringify(result), now());
-    return json(res, 200, { ok: true, data: result });
+    const only = url.searchParams.get('source');
+    const list = only ? STAT_SOURCES.filter((s) => s.key === only) : STAT_SOURCES;
+    if (!list.length) return json(res, 400, { ok: false, error: 'unknown_source' });
+
+    const out = {};
+    for (const src of list) {
+      let data;
+      try {
+        data = await src.run();
+      } catch (e) {
+        data = { ok: false, hint: String(e?.message ?? e) };
+      }
+      // В кэш пишем только настоящие данные. Ошибку и «нет токена» не кэшируем:
+      // иначе после появления ключа дашборд до утра показывал бы старое «отключено»
+      if (data && data.ok && !data.mocked && !data.error) {
+        db.prepare(`INSERT INTO stats_cache (key, value, fetched_at) VALUES (?,?,?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at`)
+          .run(src.key, JSON.stringify(data), now());
+      }
+      out[src.key] = data;
+    }
+    return json(res, 200, { ok: true, sources: out });
   },
 };
+
+// Реестр источников статистики. Одна структура на все три сервиса:
+// экран и ручка обходят этот список, поэтому новый источник — это одна запись здесь,
+// а не правка в пяти местах страницы
+const STAT_SOURCES = [
+  { key: 'ym', title: 'Яндекс.Метрика', char: 'Я', color: '#FC3F1D', run: () => fetchMetrika() },
+  { key: 'gads', title: 'Google Ads', char: 'G', color: '#34A853', run: () => fetchGoogleAds() },
+  { key: 'vk', title: 'ВКонтакте', char: 'VK', color: '#0077FF', run: () => fetchVk() },
+];
 
 // ---------- Яндекс Метрика ----------
 // Тянем отчёты через Management API. Токен — OAuth, лежит в env, никогда в коде.
@@ -979,7 +1019,8 @@ async function fetchMetrika() {
   const token = process.env.YM_TOKEN;
   const counter = process.env.YM_COUNTER;
   if (!token || !counter) {
-    return { mocked: true, hint: 'YM_TOKEN и YM_COUNTER не заданы — статистика отключена' };
+    return { ok: false, mocked: true, need: ['YM_TOKEN', 'YM_COUNTER'],
+      hint: 'Нет токена Метрики или номера счётчика — реальные цифры недоступны' };
   }
   // Формат отчёта: визиты и посетители по дням. Метрика отвечает медленно, ставим таймаут явно
   const body = new URLSearchParams({
@@ -1000,10 +1041,180 @@ async function fetchMetrika() {
       body,
       signal: ctrl.signal,
     });
-    if (!r.ok) return { error: `Метрика ответила ${r.status}` };
-    return await r.json();
+    if (!r.ok) return { ok: false, error: `Метрика ответила ${r.status}` };
+    const raw = await r.json();
+
+    // Метрика отдаёт строки по дням. Считаем итоги сами: у неё в ответе нет
+    // суммы за период, а дашборду нужна именно она
+    const rows = (raw.data || []).map((row) => ({
+      date: row.dimensions?.[0]?.name ?? '',
+      visits: Number(row.metrics?.[0] ?? 0),
+      users: Number(row.metrics?.[1] ?? 0),
+      bounce: Number(row.metrics?.[2] ?? 0),
+      pageviews: Number(row.metrics?.[3] ?? 0),
+    }));
+    const sum = (k) => rows.reduce((a, b) => a + b[k], 0);
+    const visits = sum('visits');
+    const users = sum('users');
+    const pageviews = sum('pageviews');
+    // Отказы в Метрике — доля, а не проценты. Считаем среднее по дням, взвешенное по визитам:
+    // простое среднее врёт, когда один день жирный, а остальные пустые
+    const bounce = visits ? rows.reduce((a, b) => a + b.bounce * b.visits, 0) / visits : 0;
+
+    return {
+      ok: true,
+      counter: String(counter),
+      period: '30 дней',
+      totals: { visits, users, pageviews, bounce: Math.round(bounce * 1000) / 10 },
+      series: rows.map((d) => ({ date: d.date, value: d.visits })),
+      fetched: raw.query?.date1 ?? null,
+    };
   } catch (e) {
-    return { error: e?.name === 'AbortError' ? 'Метрика не ответила за 15 с' : String(e?.message ?? e) };
+    return { ok: false, error: e?.name === 'AbortError' ? 'Метрика не ответила за 15 с' : String(e?.message ?? e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------- Google Ads ----------
+// Отчёт по расходам и клику за 30 дней. Нужны три вещи из Google Ads API:
+// developer token, refresh token и customer id. Все три — в env, в коде их нет.
+// Если чего-то не хватает, честно говорим об этом, а не рисуем нули
+async function fetchGoogleAds() {
+  const devToken = process.env.GADS_DEVELOPER_TOKEN;
+  const clientId = process.env.GADS_CLIENT_ID;
+  const clientSecret = process.env.GADS_CLIENT_SECRET;
+  const refresh = process.env.GADS_REFRESH_TOKEN;
+  const customerId = (process.env.GADS_CUSTOMER_ID || '').replace(/-/g, '');
+  if (!devToken || !clientId || !clientSecret || !refresh || !customerId) {
+    return { ok: false, mocked: true,
+      need: ['GADS_DEVELOPER_TOKEN', 'GADS_CLIENT_ID', 'GADS_CLIENT_SECRET', 'GADS_REFRESH_TOKEN', 'GADS_CUSTOMER_ID'],
+      hint: 'Нет доступа к Google Ads API — реальные расходы недоступны' };
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    // Сначала меняем refresh token на access token. Живёт час, поэтому меняем на каждый запрос
+    const tokRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId, client_secret: clientSecret,
+        refresh_token: refresh, grant_type: 'refresh_token',
+      }),
+      signal: ctrl.signal,
+    });
+    if (!tokRes.ok) return { ok: false, error: `Google не выдал токен: ${tokRes.status}` };
+    const { access_token: access } = await tokRes.json();
+
+    const q = `SELECT segments.date, metrics.cost_micros, metrics.clicks, metrics.impressions, metrics.conversions
+               FROM customer WHERE segments.date DURING LAST_30_DAYS`;
+    const r = await fetch(`https://googleads.googleapis.com/v18/customers/${customerId}/googleAds:search`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${access}`,
+        'developer-token': devToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: q }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) return { ok: false, error: `Google Ads ответил ${r.status}` };
+    const raw = await r.json();
+
+    const rows = (raw.results || []).map((x) => ({
+      date: x.segments?.date ?? '',
+      // cost_micros — миллионные доли рубля. Делим один раз здесь, чтобы наружу шли рубли
+      cost: Number(x.metrics?.costMicros ?? 0) / 1_000_000,
+      clicks: Number(x.metrics?.clicks ?? 0),
+      impressions: Number(x.metrics?.impressions ?? 0),
+      conversions: Number(x.metrics?.conversions ?? 0),
+    })).sort((a, b) => a.date.localeCompare(b.date));
+
+    const sum = (k) => rows.reduce((a, b) => a + b[k], 0);
+    const clicks = sum('clicks');
+    const cost = sum('cost');
+    return {
+      ok: true,
+      customer: process.env.GADS_CUSTOMER_ID,
+      period: '30 дней',
+      totals: {
+        cost: Math.round(cost),
+        clicks,
+        impressions: sum('impressions'),
+        conversions: Math.round(sum('conversions') * 10) / 10,
+        // Цена клика — производная, считаем здесь, а не в браузере
+        cpc: clicks ? Math.round((cost / clicks) * 100) / 100 : 0,
+      },
+      series: rows.map((d) => ({ date: d.date, value: d.cost })),
+    };
+  } catch (e) {
+    return { ok: false, error: e?.name === 'AbortError' ? 'Google Ads не ответил за 15 с' : String(e?.message ?? e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------- ВКонтакте ----------
+// Сообщество: подписчики и охваты. Токен — сервисный ключ или токен админа группы,
+// права: groups и wall. Версия API зафиксирована строкой: v5.199 живёт давно,
+// и без версии ВК начинает отвечать по-разному в разные недели
+async function fetchVk() {
+  const token = process.env.VK_TOKEN;
+  const groupId = (process.env.VK_GROUP_ID || '').replace(/^-/, '');
+  if (!token || !groupId) {
+    return { ok: false, mocked: true, need: ['VK_TOKEN', 'VK_GROUP_ID'],
+      hint: 'Нет токена ВКонтакте или id сообщества — реальные цифры недоступны' };
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  const call = async (method, params) => {
+    const u = new URL(`https://api.vk.com/method/${method}`);
+    u.searchParams.set('v', '5.199');
+    u.searchParams.set('access_token', token);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
+    const r = await fetch(u, { signal: ctrl.signal });
+    const j = await r.json();
+    // ВК всегда отвечает 200, ошибку прячет в теле. Без этой проверки молча получим пустоту
+    if (j.error) throw new Error(`ВК: ${j.error.error_msg}`);
+    return j.response;
+  };
+
+  try {
+    const [group, stats] = await Promise.all([
+      call('groups.getById', { group_id: groupId, fields: 'members_count,status' }),
+      // Статистика сообщества требует прав администратора. Если их нет, ВК вернёт ошибку —
+      // ловим её отдельно, чтобы подписчики всё равно показались
+      call('stats.get', { group_id: groupId, interval: 'day', intervals_count: 30, stats_groups: 'reach' }).catch(() => null),
+    ]);
+
+    const g = Array.isArray(group) ? group[0] : group;
+    const rows = (stats || []).map((d) => ({
+      date: d.day ?? '',
+      value: Number(d.reach?.reach_subscribers ?? d.reach?.reach ?? 0),
+    })).sort((a, b) => a.date.localeCompare(b.date));
+
+    const reach = rows.reduce((a, b) => a + b.value, 0);
+    return {
+      ok: true,
+      group: g?.name ?? null,
+      period: '30 дней',
+      totals: {
+        members: Number(g?.members_count ?? 0),
+        reach,
+        // Средний охват на день — понятнее суммы, когда период разный
+        reachAvg: rows.length ? Math.round(reach / rows.length) : 0,
+      },
+      series: rows,
+      // Отдельно помечаем, что охватов нет: подписчики пришли, а статистику ВК не отдал.
+      // Иначе карточка с нулём выглядит как «аудитории нет»
+      reachMissing: !stats,
+    };
+  } catch (e) {
+    return { ok: false, error: e?.name === 'AbortError' ? 'ВКонтакте не ответил за 15 с' : String(e?.message ?? e) };
   } finally {
     clearTimeout(timer);
   }
