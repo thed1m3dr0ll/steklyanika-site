@@ -1,988 +1,1497 @@
 ---
 // ═══════════════════════════════════════════════════════════════════════════════
-//  СТРАНИЦА          cabinet.astro · кабинет HR и маркетинга
+//  СТРАНИЦА          cabinet.astro · CRM: заявки, HR, маркетинг, админ
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-//  КАРТА ФАЙЛА — блоки и строки:
+//  КАРТА ФАЙЛА — блоки:
 //
-//  1  НАЧАЛО ДАННЫХ  импорты
-//  7  РАЗМЕТКА       всё, что видит человек: шапка, канбан, панели
-//  8    БЛОК 1      вход
-//  30   БЛОК 2      шапка кабинета и вкладки
-//  45   БЛОК 3      доска заявок (канбан)
-//  80   БЛОК 4      доска откликов (канбан)
-//  120  БЛОК 5      вакансии
-//  145  БЛОК 6      тексты, медиа, статистика, HH
-//  200  СТИЛИ        дизайн и сетка
-//  340  СКРИПТ       клиентская логика
+//  1   ДАННЫЕ         импорты
+//  2   РАЗМЕТКА       вход, каркас (сайдбар + топбар), все экраны
+//  3   СТИЛИ          темы (5 штук), каркас, таблицы, канбан, карточки
+//  4   СКРИПТ         авторизация, загрузка данных, рендер, действия
 //
-// Кабинет: вход, канбан заявок и откликов, вакансии, тексты, медиа, статистика.
-// Одна страница на все роли, панели включаются по роли — так не надо держать три копии
-// разметки и три набора стилей, которые неизбежно разъезжаются.
+//  Страница самодостаточная: свой <head>, без Base. Причина — у CRM своя оболочка
+//  с боковым меню и топбаром. Шапка публичного сайта тут только мешает:
+//  человек в кабинете не должен уезжать на «Проекты», промахнувшись мимо ссылки.
 //
-// ВАЖНО: страница статическая. Данные тянет с /api/admin/*, и те ручки проверяют сессию сами.
-// Не вздумай вшивать данные в HTML при сборке — это утечка персданных в публичный файл.
-import Base from '../../layouts/Base.astro';
+//  ВАЖНО: страница статическая, данные тянет с /api/admin/*. Ручки проверяют сессию сами.
+//  Не вздумай вшивать данные в HTML при сборке — это утечка персданных в публичный файл.
 ---
 
-<Base title="Кабинет" noindex>
-  <section class="cab">
-    <div class="cab__inner">
-      <!-- БЛОК 1. Вход. Показывается, пока нет сессии -->
-      <form class="cab__login" id="login" hidden>
-        <h1 class="cab__login-title">Кабинет</h1>
-        <p class="cab__login-sub">Войдите, чтобы работать с заявками и контентом</p>
-        <label class="cab__field">
-          <span>Почта</span>
-          <input type="email" name="email" autocomplete="username" required />
-        </label>
-        <label class="cab__field">
-          <span>Пароль</span>
-          <input type="password" name="password" autocomplete="current-password" required />
-        </label>
-        <button type="submit" class="cab__btn cab__btn--wide">Войти</button>
-        <p class="cab__err" id="login-err" role="alert"></p>
-      </form>
+export const prerender = true;
 
-      <!-- Сам кабинет -->
-      <div id="panels" hidden>
-        <!-- БЛОК 2. Шапка и вкладки -->
-        <header class="cab__top">
+<html lang="ru" data-theme="apple">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Кабинет</title>
+  <link rel="icon" href="/favicon.png" />
+  <style is:inline>
+    /* ═══════════════════════════════════════════════════════════════
+       ТЕМЫ. Пять палитр на CSS-переменных: меняем data-theme на <html>,
+       и весь интерфейс перекрашивается. Ни одного хардкода цвета ниже
+       за пределами этого блока — иначе тема перестанет работать
+       ═══════════════════════════════════════════════════════════════ */
+    :root, html[data-theme="apple"] {
+      --font-sans: -apple-system, BlinkMacSystemFont, 'CeraPro', 'SF Pro Text', 'Inter', 'Segoe UI', sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      --bg-app: #F5F5F7;
+      --bg-app-gradient: radial-gradient(1200px 500px at 15% -10%, rgba(0,113,227,.055), transparent 60%),
+                         radial-gradient(900px 420px at 90% -5%, rgba(99,102,241,.045), transparent 55%), #F5F5F7;
+      --bg-surface: #FFFFFF; --bg-surface-2: #F9FAFB; --bg-surface-3: #F1F3F6;
+      --bg-col: rgba(235,238,244,.62); --bg-topbar: rgba(245,245,247,.78);
+      --tx-1: #111318; --tx-2: #525866; --tx-3: #868C98;
+      --bd-1: rgba(17,24,39,.075); --bd-2: rgba(17,24,39,.13);
+      --accent: #0071E3; --accent-soft: rgba(0,113,227,.09);
+      --sb-bg: rgba(255,255,255,.82); --sb-border: rgba(17,24,39,.07);
+      --sb-text: #272B34; --sb-muted: #767D8C; --sb-hover: rgba(17,24,39,.045);
+      --sb-active-bg: rgba(0,113,227,.10); --sb-active-text: #0066CC;
+      --r-card: 16px; --sh-card: 0 1px 2px rgba(15,23,42,.035), 0 8px 24px -12px rgba(15,23,42,.065);
+      --ok: #059669; --warn: #B45309; --bad: #DC2626; --info: #2563EB;
+    }
+    html[data-theme="bitrix"] {
+      --bg-app: #E6F0F9; --bg-app-gradient: linear-gradient(135deg,#DCEEFB 0%,#EAF2F9 42%,#E5ECF7 75%,#DFF0FA 100%);
+      --bg-surface: #FFFFFF; --bg-surface-2: #F6FAFD; --bg-surface-3: #EBF3FA;
+      --bg-col: rgba(226,238,250,.7); --bg-topbar: rgba(230,240,249,.82);
+      --tx-1: #1F2A37; --tx-2: #5A6678; --tx-3: #8A94A6;
+      --bd-1: rgba(46,139,255,.14); --bd-2: rgba(46,139,255,.26);
+      --accent: #2E8BFF; --accent-soft: rgba(46,139,255,.10);
+      --sb-bg: rgba(255,255,255,.75); --sb-border: rgba(46,139,255,.18);
+      --sb-text: #233040; --sb-muted: #6B7A91; --sb-hover: rgba(46,139,255,.06);
+      --sb-active-bg: rgba(46,139,255,.12); --sb-active-text: #2E8BFF;
+    }
+    html[data-theme="erp"] {
+      --bg-app: #F7F8FA; --bg-app-gradient: #F7F8FA;
+      --bg-surface: #FFFFFF; --bg-surface-2: #F4F6F8; --bg-surface-3: #EDF0F4;
+      --bg-col: #EEF1F5; --bg-topbar: rgba(247,248,250,.9);
+      --tx-1: #0F1B2D; --tx-2: #4A5568; --tx-3: #8B94A3;
+      --bd-1: #E5E7EB; --bd-2: #D1D5DB;
+      --accent: #1A56DB; --accent-soft: rgba(26,86,219,.08);
+      --sb-bg: #FFFFFF; --sb-border: #E4E7EB; --sb-text: #1F2937; --sb-muted: #6B7280;
+      --sb-hover: #F3F4F6; --sb-active-bg: #E8F0FE; --sb-active-text: #1A56DB;
+      --r-card: 8px; --sh-card: 0 1px 3px rgba(15,23,42,.06);
+    }
+    html[data-theme="skatinov"], html[data-theme="dark"] {
+      --bg-app: #07080D;
+      --bg-app-gradient: radial-gradient(1200px 700px at 12% -8%, rgba(127,209,255,.12), transparent 60%),
+                         radial-gradient(1100px 700px at 100% 0%, rgba(184,155,255,.12), transparent 55%), #07080D;
+      --bg-surface: #0E1016; --bg-surface-2: #12141B; --bg-surface-3: #1A1D26;
+      --bg-col: rgba(26,29,38,.6); --bg-topbar: rgba(14,16,22,.82);
+      --tx-1: #E8ECF4; --tx-2: #9AA3B2; --tx-3: #6B7280;
+      --accent: #7fd1ff; --accent-soft: rgba(127,209,255,.12);
+      --sb-bg: rgba(14,16,22,.88); --sb-border: rgba(255,255,255,.08);
+      --sb-text: #D8DEE9; --sb-muted: #7C8595; --sb-hover: rgba(255,255,255,.05);
+      --sb-active-bg: rgba(127,209,255,.12); --sb-active-text: #7fd1ff;
+      --bd-1: rgba(255,255,255,.08); --bd-2: rgba(255,255,255,.14);
+      --ok: #34D399; --warn: #FBBF24; --bad: #F87171; --info: #60A5FA;
+    }
+
+    @font-face { font-family: 'CeraPro'; src: url('/fonts/CeraPro-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+    @font-face { font-family: 'CeraPro'; src: url('/fonts/CeraPro-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+    @font-face { font-family: 'CeraPro'; src: url('/fonts/CeraPro-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: var(--font-sans); color: var(--tx-1); background: var(--bg-app-gradient);
+      background-attachment: fixed; -webkit-font-smoothing: antialiased;
+      display: flex; min-height: 100vh;
+    }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    a { color: var(--accent); }
+
+    /* ─────────── ВХОД ─────────── */
+    .login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      padding: 24px; z-index: 500; background: var(--bg-app-gradient); }
+    .login[hidden] { display: none; }
+    .login form { width: 100%; max-width: 380px; background: var(--bg-surface); border: 1px solid var(--bd-1);
+      border-radius: var(--r-card); padding: 32px; display: grid; gap: 14px; box-shadow: var(--sh-card); }
+    .login h1 { margin: 0; font-size: 26px; }
+    .login p.sub { margin: 0 0 6px; color: var(--tx-2); font-size: 14px; }
+    .login label { display: grid; gap: 6px; font-size: 13px; color: var(--tx-2); }
+    .login input { padding: 11px 13px; border: 1px solid var(--bd-2); border-radius: 9px;
+      background: var(--bg-surface-2); color: var(--tx-1); }
+    .login input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .login .err { color: var(--bad); font-size: 13px; margin: 0; min-height: 1.1em; }
+
+    /* ─────────── КАРКАС ─────────── */
+    .shell { display: flex; width: 100%; }
+    .shell[hidden] { display: none; }
+
+    .sb { width: 252px; flex: 0 0 252px; background: var(--sb-bg); border-right: 1px solid var(--sb-border);
+      backdrop-filter: blur(18px); display: flex; flex-direction: column; position: sticky; top: 0;
+      height: 100vh; overflow-y: auto; z-index: 30; }
+    .sb-brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px 16px; }
+    .sb-logo { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: #fff;
+      display: grid; place-items: center; font-weight: 700; font-size: 15px; flex: 0 0 32px; }
+    .sb-name { font-weight: 700; font-size: 15px; color: var(--sb-text); line-height: 1.15; }
+    .sb-name small { display: block; font-weight: 400; font-size: 11px; color: var(--sb-muted); margin-top: 2px; }
+
+    .sb-section { padding: 14px 12px 4px; font-size: 10.5px; text-transform: uppercase;
+      letter-spacing: .07em; color: var(--sb-muted); font-weight: 600; }
+    .sb-item { display: flex; align-items: center; gap: 10px; width: calc(100% - 16px); margin: 2px 8px;
+      padding: 9px 10px; border: 0; background: transparent; border-radius: 9px; cursor: pointer;
+      color: var(--sb-text); font-size: 13.5px; text-align: left; transition: background .12s; }
+    .sb-item:hover { background: var(--sb-hover); }
+    .sb-item.on { background: var(--sb-active-bg); color: var(--sb-active-text); font-weight: 600; }
+    .sb-item svg { width: 17px; height: 17px; flex: 0 0 17px; stroke: currentColor; fill: none; stroke-width: 1.9; }
+    .sb-badge { margin-left: auto; font-size: 11px; font-weight: 700; background: var(--bad); color: #fff;
+      border-radius: 999px; padding: 1px 7px; }
+    .sb-badge[hidden] { display: none; }
+
+    .sb-foot { margin-top: auto; padding: 14px 14px 16px; border-top: 1px solid var(--sb-border); }
+    .sb-user { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .sb-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+      display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: 0 0 32px; }
+    .sb-user .u-name { font-size: 13px; font-weight: 600; color: var(--sb-text); }
+    .sb-user .u-role { font-size: 10.5px; color: var(--sb-muted); }
+
+    .theme-switch { display: flex; gap: 4px; flex-wrap: wrap; }
+    .theme-switch button { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent;
+      cursor: pointer; padding: 0; }
+    .theme-switch button.on { border-color: var(--accent); }
+
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .topbar { position: sticky; top: 0; z-index: 20; background: var(--bg-topbar); backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--bd-1); padding: 14px 26px; display: flex; align-items: center; gap: 14px; }
+    .topbar h1 { margin: 0; font-size: 19px; }
+    .topbar .spacer { margin-left: auto; }
+    .content { padding: 24px 26px 60px; }
+
+    /* ─────────── КНОПКИ ─────────── */
+    .btn { padding: 9px 15px; border-radius: 9px; border: 1px solid transparent; background: var(--accent);
+      color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .btn:hover { filter: brightness(1.07); }
+    .btn--ghost { background: var(--bg-surface-2); color: var(--tx-1); border-color: var(--bd-1); }
+    .btn--ghost:hover { background: var(--bg-surface-3); }
+    .btn--danger { background: var(--bad); }
+    .btn--sm { padding: 6px 11px; font-size: 12px; }
+
+    /* ─────────── KPI ─────────── */
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 22px; }
+    .kpi { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      padding: 16px 18px; box-shadow: var(--sh-card); }
+    .kpi .k-label { font-size: 12px; color: var(--tx-3); text-transform: uppercase; letter-spacing: .05em; }
+    .kpi .k-val { font-size: 26px; font-weight: 700; margin-top: 6px; letter-spacing: -.02em; }
+    .kpi .k-sub { font-size: 12px; color: var(--tx-2); margin-top: 4px; }
+
+    /* ─────────── ТАБЛИЦЫ ─────────── */
+    .tbl-wrap { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      overflow: auto; box-shadow: var(--sh-card); }
+    table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .tbl th { text-align: left; padding: 11px 13px; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--tx-3); background: var(--bg-surface-2);
+      border-bottom: 1px solid var(--bd-1); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+    .tbl th[data-sort] { cursor: pointer; user-select: none; }
+    .tbl th[data-sort]:hover { color: var(--tx-1); }
+    .tbl th.sorted-desc::after { content: ' ↓'; color: var(--accent); }
+    .tbl th.sorted-asc::after { content: ' ↑'; color: var(--accent); }
+    .tbl td { padding: 9px 13px; border-bottom: 1px solid var(--bd-1); vertical-align: middle; }
+    .tbl tr:last-child td { border-bottom: 0; }
+    .tbl tbody tr:hover td { background: var(--bg-surface-2); }
+    .tbl .empty { text-align: center; color: var(--tx-3); padding: 34px 13px; }
+    .tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .tbl .nowrap { white-space: nowrap; }
+    .tbl .muted { color: var(--tx-3); font-size: 12px; }
+
+    /* Правка прямо в ячейке: поле выглядит как текст, пока в него не встали */
+    .cell { width: 100%; border: 1px solid transparent; background: transparent; padding: 5px 7px;
+      border-radius: 7px; font-size: 13.5px; }
+    .cell:hover { border-color: var(--bd-1); background: var(--bg-surface); }
+    .cell:focus { outline: 0; border-color: var(--accent); background: var(--bg-surface); }
+    .cell.saved { border-color: var(--ok) !important; background: var(--accent-soft) !important; }
+    .cell.failed { border-color: var(--bad) !important; }
+
+    .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
+      padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+    .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .icon-btn { border: 1px solid var(--bd-1); background: var(--bg-surface); border-radius: 7px;
+      width: 27px; height: 27px; cursor: pointer; color: var(--tx-2); font-size: 14px; line-height: 1; }
+    .icon-btn:hover { background: var(--bg-surface-3); color: var(--tx-1); }
+    .icon-btn.del:hover { background: rgba(220,38,38,.12); color: var(--bad); border-color: var(--bad); }
+
+    /* ─────────── ФИЛЬТРЫ ─────────── */
+    .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .bar input, .bar select { padding: 9px 12px; border: 1px solid var(--bd-2); border-radius: 9px;
+      background: var(--bg-surface); color: var(--tx-1); font-size: 13px; }
+    .bar input[type=search] { min-width: 230px; }
+    .seg { display: inline-flex; background: var(--bg-surface-2); border: 1px solid var(--bd-1);
+      border-radius: 10px; padding: 3px; gap: 2px; }
+    .seg button { border: 0; background: transparent; padding: 7px 13px; border-radius: 8px; cursor: pointer;
+      font-size: 12.5px; font-weight: 600; color: var(--tx-2); }
+    .seg button.on { background: var(--bg-surface); color: var(--tx-1); box-shadow: 0 1px 3px rgba(15,23,42,.1); }
+
+    /* ─────────── КАНБАН ─────────── */
+    .kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 12px;
+      overflow-x: auto; padding-bottom: 10px; align-items: start; }
+    .kcol { background: var(--bg-col); border-radius: 14px; padding: 11px; min-height: 120px; }
+    .kcol.over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+    .kcol-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 0 3px;
+      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--tx-2); }
+    .kcol-n { margin-left: auto; background: var(--bg-surface); border-radius: 999px; padding: 1px 8px;
+      font-size: 11px; color: var(--tx-3); font-weight: 600; }
+    .klist { display: grid; gap: 8px; }
+    .kcard { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: 11px;
+      padding: 11px 13px; cursor: grab; display: grid; gap: 4px; box-shadow: var(--sh-card); }
+    .kcard:active { cursor: grabbing; }
+    .kcard.dragging { opacity: .4; }
+    .kcard .k-name { font-weight: 600; font-size: 13.5px; }
+    .kcard .k-contact { font-size: 12.5px; color: var(--tx-2); }
+    .kcard .k-meta { font-size: 11.5px; color: var(--tx-3); }
+    .kcard .k-amount { font-size: 13px; font-weight: 700; color: var(--ok); }
+
+    /* ─────────── КАРТОЧКИ (плитка) ─────────── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+    .card { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      padding: 16px; box-shadow: var(--sh-card); display: grid; gap: 8px; cursor: pointer; }
+    .card:hover { border-color: var(--bd-2); transform: translateY(-1px); }
+    .card .c-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .card .c-name { font-weight: 700; font-size: 14.5px; }
+    .card .c-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--tx-2); }
+    .card .c-amount { font-size: 17px; font-weight: 700; }
+
+    /* ─────────── ФОРМА ДОБАВЛЕНИЯ ─────────── */
+    .formbox { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      padding: 16px; margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px; box-shadow: var(--sh-card); }
+    .formbox[hidden] { display: none; }
+    .formbox input, .formbox select, .formbox textarea { padding: 9px 12px; border: 1px solid var(--bd-2);
+      border-radius: 9px; background: var(--bg-surface-2); color: var(--tx-1); font-size: 13px; }
+    .formbox textarea { grid-column: 1 / -1; resize: vertical; }
+    .formbox .f-actions { grid-column: 1 / -1; display: flex; gap: 9px; }
+
+    /* ─────────── КАРТОЧКА-ЛИСТ (детали) ─────────── */
+    .modal { position: fixed; inset: 0; background: rgba(8,12,20,.55); backdrop-filter: blur(3px);
+      display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 400; }
+    .modal[hidden] { display: none; }
+    .sheet { background: var(--bg-surface); border-radius: var(--r-card); width: 100%; max-width: 600px;
+      max-height: 86vh; overflow: auto; padding: 24px; box-shadow: 0 24px 60px rgba(0,0,0,.28); }
+    .sheet h3 { margin: 0 0 4px; font-size: 20px; }
+    .sheet .sh-sub { color: var(--tx-2); font-size: 13px; margin: 0 0 18px; }
+    .sheet dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 14px; margin: 0 0 18px; font-size: 13.5px; }
+    .sheet dt { color: var(--tx-3); }
+    .sheet dd { margin: 0; word-break: break-word; }
+    .sheet textarea { width: 100%; min-height: 78px; padding: 10px 12px; border: 1px solid var(--bd-2);
+      border-radius: 9px; background: var(--bg-surface-2); color: var(--tx-1); resize: vertical; margin-bottom: 12px; }
+    .sheet .sh-actions { display: flex; gap: 9px; flex-wrap: wrap; border-top: 1px solid var(--bd-1); padding-top: 16px; }
+
+    /* ─────────── МЕЛОЧИ ─────────── */
+    .hint { color: var(--tx-3); font-size: 13px; margin: 0 0 14px; }
+    .warn { color: var(--warn); background: var(--accent-soft); border-radius: 9px; padding: 11px 13px;
+      font-size: 12.5px; margin: 12px 0 0; }
+    .sumline { color: var(--tx-2); font-size: 13px; margin-top: 12px; }
+    .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+    .media-grid figure { margin: 0; }
+    .media-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--bg-surface-3); }
+    .media-grid figcaption { font-size: 11.5px; color: var(--tx-3); margin-top: 6px; word-break: break-word; }
+    .pre { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
+      padding: 16px; overflow: auto; font-size: 12px; max-height: 400px; font-family: var(--font-mono); }
+    .toast { position: fixed; right: 22px; bottom: 22px; background: var(--tx-1); color: var(--bg-surface);
+      padding: 13px 17px; border-radius: 11px; font-size: 13.5px; z-index: 600; cursor: pointer;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    .toast[hidden] { display: none; }
+
+    @media (max-width: 900px) {
+      .sb { position: fixed; left: -260px; transition: left .2s; }
+      .sb.open { left: 0; }
+      .content { padding: 16px 14px 50px; }
+      .topbar { padding: 12px 14px; }
+      .kanban { grid-auto-columns: minmax(230px, 84vw); }
+      .sheet dl { grid-template-columns: 1fr; gap: 2px 0; }
+      .sheet dt { margin-top: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- ═══════════ ВХОД ═══════════ -->
+  <div class="login" id="login">
+    <form id="login-form">
+      <h1>Кабинет</h1>
+      <p class="sub">Войдите, чтобы работать с заявками и контентом</p>
+      <label>Почта <input type="email" name="email" autocomplete="username" required /></label>
+      <label>Пароль <input type="password" name="password" autocomplete="current-password" required /></label>
+      <button class="btn" type="submit">Войти</button>
+      <p class="err" id="login-err" role="alert"></p>
+    </form>
+  </div>
+
+  <!-- ═══════════ КАРКАС ═══════════ -->
+  <div class="shell" id="shell" hidden>
+    <aside class="sb" id="sidebar">
+      <div class="sb-brand">
+        <div class="sb-logo">С</div>
+        <div class="sb-name">Стекляника<small>система учёта</small></div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sb-foot">
+        <div class="sb-user">
+          <div class="sb-avatar" id="user-initial">?</div>
           <div>
-            <h1 class="cab__title">Кабинет</h1>
-            <p class="cab__sub" id="cab-sub"></p>
+            <div class="u-name" id="user-name">—</div>
+            <div class="u-role" id="user-role">—</div>
           </div>
-          <button class="cab__logout" id="logout" type="button">Выйти</button>
-        </header>
-
-        <nav class="cab__tabs">
-          <button class="cab__tab" data-panel="leads" data-roles="hr,marketing">
-            Заявки <span class="cab__count" id="cnt-leads" hidden>0</span>
-          </button>
-          <button class="cab__tab" data-panel="apps" data-roles="hr">
-            Отклики <span class="cab__count" id="cnt-apps" hidden>0</span>
-          </button>
-          <button class="cab__tab" data-panel="hr" data-roles="hr">Вакансии</button>
-          <button class="cab__tab" data-panel="texts" data-roles="marketing">Тексты</button>
-          <button class="cab__tab" data-panel="media" data-roles="marketing">Медиа</button>
-          <button class="cab__tab" data-panel="stats" data-roles="marketing">Статистика</button>
-        </nav>
-
-        <!-- БЛОК 3. Заявки — таблица с фильтрами. Канбан пробовали, не зашёл:
-             менеджеру нужен список, сортировка по сумме и выгрузка, а не карточки -->
-        <section class="cab__panel" data-panel="leads">
-          <div class="cab__bar">
-            <input id="f-q" type="search" placeholder="Имя, контакт или объект" />
-            <select id="f-status">
-              <option value="">Все статусы</option>
-              <option value="new">Новые</option>
-              <option value="in_progress">В работе</option>
-              <option value="archived">Архив</option>
-              <option value="spam">Спам</option>
-            </select>
-            <select id="f-source">
-              <option value="">Все источники</option>
-              <option value="modal">Окно заявки</option>
-              <option value="quiz">Квиз</option>
-              <option value="contacts">Контакты</option>
-              <option value="resume">Резюме</option>
-              <option value="manual">Заведена вручную</option>
-            </select>
-            <button class="cab__btn" id="lead-add" type="button">Добавить заявку</button>
-            <a class="cab__btn cab__btn--ghost" id="lead-export" href="/api/admin/leads/export">Выгрузить в Excel</a>
-          </div>
-
-          <!-- Форма ручного добавления. Скрыта по умолчанию: телефонный звонок — не повод
-               держать пустую форму на экране -->
-          <form class="cab__newlead" id="newlead" hidden>
-            <input name="name" placeholder="Имя клиента" required />
-            <input name="contact" placeholder="Телефон или почта" required />
-            <input name="object" placeholder="Объект" />
-            <input name="amount" type="number" min="0" step="1000" placeholder="Сумма, ₽" />
-            <select name="status">
-              <option value="new">Новая</option>
-              <option value="in_progress">В работе</option>
-            </select>
-            <textarea name="comment" rows="2" placeholder="Примечание"></textarea>
-            <div class="cab__newlead-actions">
-              <button class="cab__btn" type="submit">Сохранить</button>
-              <button class="cab__btn cab__btn--ghost" type="button" id="newlead-cancel">Отмена</button>
-            </div>
-          </form>
-
-          <div class="cab__tablewrap">
-            <table class="cab__table" id="leads-table">
-              <thead>
-                <tr>
-                  <th data-sort="created_at">Дата</th>
-                  <th data-sort="name">Клиент</th>
-                  <th data-sort="object">Объект</th>
-                  <th data-sort="amount">Сумма</th>
-                  <th data-sort="status">Статус</th>
-                  <th data-sort="assigned_to">Ответственный</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="leads-body"><tr><td colspan="7" class="cab__td-empty">Загрузка…</td></tr></tbody>
-            </table>
-          </div>
-          <p class="cab__hint" id="leads-sum"></p>
-        </section>
-
-        <!-- БЛОК 4. Отклики на вакансии — та же доска, другой набор статусов -->
-        <section class="cab__panel" data-panel="apps" hidden>
-          <div class="cab__bar">
-            <select id="f-vacancy"><option value="">Все вакансии</option></select>
-            <p class="cab__hint cab__hint--inline">Резюме открывается в новой вкладке, доступ только по сессии</p>
-          </div>
-          <div class="cab__board" id="board-apps" data-kind="apps"></div>
-        </section>
-
-        <!-- БЛОК 5. Вакансии и подключение HH -->
-        <section class="cab__panel" data-panel="hr" hidden>
-          <div class="cab__hh">
-            <div class="cab__hh-head">
-              <strong>HH.ru</strong>
-              <span id="hh-status" class="cab__hint cab__hint--inline">Проверяю подключение…</span>
-            </div>
-            <div class="cab__hh-actions">
-              <a class="cab__btn cab__btn--ghost" id="hh-auth" href="/api/admin/hh/auth" target="_blank" rel="noopener">Подключить HH</a>
-              <button class="cab__btn cab__btn--ghost" id="hh-sync" type="button">Синхронизировать</button>
-            </div>
-            <!-- Про тариф пишем прямо в интерфейсе: HR должен знать, что прогон стоит денег -->
-            <p class="cab__warn">Получение откликов у HH платное — пакетами запросов. Не жмите синхронизацию без нужды.</p>
-          </div>
-          <h2 class="cab__h2">Вакансии</h2>
-          <div id="vac-list" class="cab__list">Загрузка…</div>
-        </section>
-
-        <!-- БЛОК 6. Тексты, медиа, статистика -->
-        <section class="cab__panel" data-panel="texts" hidden>
-          <h2 class="cab__h2">Тексты сайта</h2>
-          <p class="cab__hint">Черновик не попадает на сайт, пока не нажмёте «Опубликовать».</p>
-          <div id="texts-list" class="cab__list">Загрузка…</div>
-        </section>
-
-        <section class="cab__panel" data-panel="media" hidden>
-          <h2 class="cab__h2">Медиатека</h2>
-          <form id="media-form" class="cab__upload">
-            <input type="file" name="file" accept="image/*" required />
-            <input type="text" name="alt" placeholder="Подпись (alt) — обязательна для SEO" />
-            <button type="submit" class="cab__btn">Загрузить</button>
-          </form>
-          <p class="cab__err" id="media-err" role="alert"></p>
-          <div id="media-list" class="cab__grid">Загрузка…</div>
-        </section>
-
-        <section class="cab__panel" data-panel="stats" hidden>
-          <h2 class="cab__h2">Статистика</h2>
-          <p class="cab__hint">Данные из Яндекс.Метрики. Обновляются кнопкой, не на каждый показ — щадим лимиты API.</p>
-          <button class="cab__btn" id="stats-refresh" type="button">Обновить данные</button>
-          <pre id="stats-out" class="cab__pre"></pre>
-        </section>
+        </div>
+        <div class="theme-switch" id="theme-switch" title="Оформление"></div>
+        <button class="btn btn--ghost btn--sm" id="logout" type="button" style="width:100%;margin-top:10px">Выйти</button>
       </div>
+    </aside>
 
-      <!-- Карточка и плашка перекрывают экран, поэтому живут в конце, но внутри Base:
-           иначе они уедут за пределы body и потеряют стили -->
-      <div class="cab__modal" id="sheet" hidden>
-        <div class="cab__sheet" id="sheet-body"></div>
+    <main class="main">
+      <div class="topbar">
+        <h1 id="view-title">Обзор</h1>
+        <div class="spacer"></div>
+        <div id="top-actions"></div>
       </div>
-      <p class="cab__toast" id="toast" hidden></p>
-    </div>
-  </section>
-</Base>
+      <div class="content" id="content"></div>
+    </main>
+  </div>
 
-<style>
-  /* Палитра взята из прежнего кабинета — чтобы правка не выглядела как «другой сайт» */
-  .cab { padding: 100px 0 80px; background: #f6f8f7; min-height: 100vh; }
-  .cab__inner { max-width: 1320px; margin: 0 auto; padding: 0 24px; }
+  <!-- Детали записи поверх экрана -->
+  <div class="modal" id="modal" hidden>
+    <div class="sheet" id="sheet"></div>
+  </div>
+  <p class="toast" id="toast" hidden></p>
 
-  /* ---------- вход ---------- */
-  .cab__login { display: grid; gap: 16px; max-width: 380px; margin: 40px auto; background: #fff;
-    padding: 32px; border-radius: 14px; border: 1px solid #e3e7e5; }
-  .cab__login-title { font-size: 30px; margin: 0; }
-  .cab__login-sub { color: #6b7673; margin: 0 0 8px; font-size: 15px; }
-  .cab__field { display: grid; gap: 6px; font-size: 14px; }
-  .cab__field input { padding: 12px 14px; border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
-  .cab__field input:focus { outline: 2px solid #3d4a47; outline-offset: 1px; }
-  .cab__btn { padding: 12px 20px; border: 0; border-radius: 8px; background: #3d4a47; color: #fff;
-    font: inherit; cursor: pointer; }
-  .cab__btn:hover { background: #2f3a38; }
-  .cab__btn--wide { width: 100%; }
-  .cab__btn--ghost { background: #eef1f0; color: #3d4a47; }
-  .cab__btn--ghost:hover { background: #e1e6e4; }
-  .cab__err { color: #b03030; margin: 8px 0 0; font-size: 14px; min-height: 1em; }
+  <script is:inline>
+// ═══════════════════════════════════════════════════════════════════════════════
+//  СКРИПТ CRM. Авторизация, загрузка, рендер, действия.
+//
+//  Правила, которые ломать нельзя:
+//  1. Всё, что пришло из базы, идёт в innerHTML ТОЛЬКО через esc(). Иначе XSS.
+//  2. Любая ошибка сети показывается человеку, а не глотается.
+//  3. Сессия проверяется через /me. Пока её нет — рисуем только форму входа.
+// ═══════════════════════════════════════════════════════════════════════════════
+(function () {
+  'use strict';
 
-  /* ---------- шапка ---------- */
-  .cab__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-  .cab__title { font-size: 30px; margin: 0 0 4px; }
-  .cab__sub { color: #6b7673; margin: 0; font-size: 14px; }
-  .cab__logout { background: none; border: 0; color: #6b7673; cursor: pointer; font: inherit;
-    text-decoration: underline; white-space: nowrap; }
+  // ─────────── УТИЛИТЫ ───────────
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
-  /* ---------- вкладки ---------- */
-  .cab__tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px;
-    border-bottom: 1px solid #e3e7e5; padding-bottom: 14px; }
-  .cab__tab { padding: 10px 16px; border: 0; background: #eef1f0; border-radius: 8px; font: inherit;
-    cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
-  .cab__tab.is-active { background: #3d4a47; color: #fff; }
-  /* Бейдж с числом новых. Внутри активной вкладки его надо перекрасить, иначе сольётся с фоном */
-  .cab__count { font-size: 12px; background: #b03030; color: #fff; border-radius: 20px;
-    padding: 1px 8px; font-weight: 600; }
-  .cab__tab.is-active .cab__count { background: #fff; color: #b03030; }
+  // Экранируем и одинарную кавычку: значения уходят не только в текст, но и в атрибуты
+  const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  const esc = (v) => String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 
-  /* ---------- канбан ---------- */
-  .cab__bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
-  .cab__bar select, .cab__bar input { padding: 10px 12px; border: 1px solid #d5dbd8; border-radius: 8px;
-    font: inherit; background: #fff; }
-  .cab__bar input[type=search] { min-width: 240px; }
-  .cab__board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr);
-    gap: 14px; overflow-x: auto; padding-bottom: 12px; align-items: start; }
-  .cab__col { background: #eef1f0; border-radius: 12px; padding: 12px; min-height: 120px; }
-  /* Подсветка колонки, когда над ней тащат карточку. Без неё непонятно, куда она упадёт */
-  .cab__col.is-over { outline: 2px dashed #3d4a47; outline-offset: -2px; }
-  .cab__col-head { display: flex; justify-content: space-between; align-items: center;
-    font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
-    color: #6b7673; margin-bottom: 10px; padding: 0 2px; }
-  .cab__col-n { background: #fff; border-radius: 20px; padding: 1px 8px; font-size: 12px; color: #6b7673; }
-  .cab__cards { display: grid; gap: 8px; }
+  const money = (v) => (v === null || v === undefined || v === '' ? '—' : Number(v).toLocaleString('ru-RU') + ' ₽');
+  const fmtDate = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return String(iso);
+    return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  };
+  const today = () => new Date().toISOString().slice(0, 10);
 
-  /* карточка */
-  .cab__card { background: #fff; border: 1px solid #e3e7e5; border-radius: 10px; padding: 12px 14px;
-    cursor: grab; display: grid; gap: 4px; }
-  .cab__card:active { cursor: grabbing; }
-  .cab__card.is-drag { opacity: .4; }
-  .cab__card:hover { border-color: #c3ccc9; }
-  .cab__card-name { font-weight: 600; font-size: 15px; }
-  .cab__card-contact { font-size: 14px; color: #3d4a47; }
-  .cab__card-meta { font-size: 12px; color: #8b9591; }
-  .cab__card-note { font-size: 12px; color: #8a6d1f; background: #fdf7e3; border-radius: 6px;
-    padding: 4px 6px; }
-  .cab__card-old { border-left: 3px solid #b03030; }
+  // ─────────── СОСТОЯНИЕ ───────────
+  let me = null;
+  let view = null;          // текущий экран
+  const cache = {};         // здесь живут загруженные списки, чтобы не дёргать сервер на каждый рендер
 
-  /* ---------- таблица заявок ---------- */
-  .cab__tablewrap { overflow-x: auto; background: #fff; border: 1px solid #e3e7e5; border-radius: 12px; }
-  .cab__table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  .cab__table th { text-align: left; padding: 11px 12px; font-size: 12px; text-transform: uppercase;
-    letter-spacing: .04em; color: #6b7673; border-bottom: 1px solid #e3e7e5; white-space: nowrap;
-    background: #fbfcfc; position: sticky; top: 0; z-index: 1; }
-  /* Кликбельная сортировка: стрелку рисуем псевдоэлементом, чтобы не тащить иконки */
-  .cab__table th[data-sort] { cursor: pointer; user-select: none; }
-  .cab__table th[data-sort]:hover { color: #3d4a47; }
-  .cab__table th.is-sorted::after { content: ' ↓'; color: #3d4a47; }
-  .cab__table th.is-sorted-asc::after { content: ' ↑'; color: #3d4a47; }
-  .cab__table td { padding: 8px 12px; border-bottom: 1px solid #f0f3f2; vertical-align: middle; }
-  .cab__table tr:last-child td { border-bottom: 0; }
-  .cab__table tr:hover td { background: #fafbfb; }
-  /* Поле внутри ячейки выглядит как текст, пока в него не встали.
-     Так таблица не похожа на форму из сотни инпутов, но править можно прямо здесь */
-  .cab__cell { width: 100%; box-sizing: border-box; border: 1px solid transparent; background: transparent;
-    padding: 6px 8px; border-radius: 6px; font: inherit; color: inherit; }
-  .cab__cell:hover { border-color: #e3e7e5; background: #fff; }
-  .cab__cell:focus { outline: 0; border-color: #3d4a47; background: #fff; }
-  .cab__cell--num { max-width: 120px; text-align: right; }
-  /* Подсветка сохранения: без неё непонятно, ушло ли изменение на сервер */
-  .cab__cell--saved { border-color: #2c6e5a !important; background: #eef7f2 !important; }
-  .cab__cell--err { border-color: #b03030 !important; background: #fdecec !important; }
-  .cab__cell-sub { font-size: 12px; color: #8b9591; padding: 0 8px; }
-  .cab__td-date { color: #6b7673; white-space: nowrap; font-size: 13px; }
-  .cab__td-actions { white-space: nowrap; text-align: right; }
-  .cab__td-empty { text-align: center; color: #8b9591; padding: 32px 12px !important; }
-  .cab__icon { border: 1px solid #e3e7e5; background: #fff; border-radius: 6px; width: 28px; height: 28px;
-    cursor: pointer; font-size: 15px; line-height: 1; color: #3d4a47; }
-  .cab__icon:hover { background: #eef1f0; }
-  .cab__icon--del:hover { background: #fdecec; color: #b03030; border-color: #f0c8c8; }
-
-  /* форма ручного добавления */
-  .cab__newlead { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
-    background: #fff; border: 1px solid #e3e7e5; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .cab__newlead input, .cab__newlead select, .cab__newlead textarea { padding: 10px 12px;
-    border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
-  .cab__newlead textarea { grid-column: 1 / -1; font-family: inherit; }
-  .cab__newlead-actions { grid-column: 1 / -1; display: flex; gap: 10px; }
-
-  .cab__hint { color: #6b7673; font-size: 14px; margin: 0 0 16px; }
-  .cab__hint--inline { margin: 0; }
-  .cab__warn { color: #8a6d1f; background: #fdf7e3; padding: 10px 12px; border-radius: 8px;
-    font-size: 13px; margin: 12px 0 0; }
-  .cab__h2 { font-size: 22px; margin: 0 0 12px; }
-  .cab__h3 { font-size: 15px; margin: 24px 0 10px; text-transform: uppercase;
-    letter-spacing: .04em; color: #6b7673; }
-
-  /* ---------- вакансии и прочие списки ---------- */
-  .cab__list { display: grid; gap: 10px; }
-  .cab__row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px 16px;
-    background: #fff; border: 1px solid #e3e7e5; border-radius: 10px; }
-  /* Тексты правятся на месте, поэтому строка не в две колонки, а в столбик */
-  .cab__row--text { grid-template-columns: 1fr; }
-  .cab__text-head small { color: #8b9591; display: block; margin-top: 4px; }
-  .cab__text-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .cab__text-actions .cab__btn { padding: 9px 14px; font-size: 14px; }
-  .cab__row small { color: #8b9591; display: block; margin-top: 4px; }
-  .cab__row select { padding: 6px 10px; border: 1px solid #d5dbd8; border-radius: 8px; font: inherit;
-    background: #fff; }
-
-  .cab__hh { padding: 16px; background: #fff; border: 1px solid #e3e7e5; border-radius: 10px; margin-bottom: 24px; }
-  .cab__hh-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
-  .cab__hh-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 0; }
-  a.cab__btn { text-decoration: none; display: inline-block; }
-
-  .cab__upload { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
-  .cab__upload input[type=text] { flex: 1; min-width: 220px; padding: 10px 12px;
-    border: 1px solid #d5dbd8; border-radius: 8px; font: inherit; }
-  .cab__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-  .cab__grid figure { margin: 0; }
-  .cab__grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: #eef1f0; }
-  .cab__grid figcaption { font-size: 12px; color: #8b9591; margin-top: 6px; word-break: break-word; }
-  .cab__pre { background: #fff; padding: 16px; border-radius: 10px; overflow: auto;
-    font-size: 12px; max-height: 400px; border: 1px solid #e3e7e5; }
-  .cab__row a { color: #2c6e5a; }
-
-  /* ---------- карточка заявки поверх экрана ---------- */
-  .cab__modal { position: fixed; inset: 0; background: rgba(30, 38, 36, .55); display: flex;
-    align-items: center; justify-content: center; padding: 24px; z-index: 100; }
-  .cab__modal[hidden] { display: none; }
-  .cab__sheet { background: #fff; border-radius: 14px; max-width: 620px; width: 100%;
-    max-height: 86vh; overflow: auto; padding: 26px; }
-  .cab__sheet h3 { margin: 0 0 4px; font-size: 22px; }
-  .cab__sheet-sub { color: #6b7673; font-size: 14px; margin: 0 0 20px; }
-  .cab__sheet dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; margin: 0 0 20px;
-    font-size: 14px; }
-  .cab__sheet dt { color: #6b7673; }
-  .cab__sheet dd { margin: 0; word-break: break-word; }
-  .cab__sheet-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-    border-top: 1px solid #e3e7e5; padding-top: 18px; }
-  .cab__sheet-actions .cab__btn { padding: 10px 16px; }
-  .cab__comment { width: 100%; min-height: 84px; padding: 10px 12px; border: 1px solid #d5dbd8;
-    border-radius: 8px; font: inherit; box-sizing: border-box; margin-bottom: 12px; }
-
-  /* Всплывашка о новой заявке — браузер сам гасит её через несколько секунд */
-  .cab__toast { position: fixed; right: 24px; bottom: 24px; background: #3d4a47; color: #fff;
-    padding: 14px 18px; border-radius: 10px; font-size: 14px; z-index: 200; cursor: pointer;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .2); }
-  .cab__toast[hidden] { display: none; }
-
-  @media (max-width: 720px) {
-    .cab { padding-top: 80px; }
-    .cab__top { flex-direction: column; }
-    .cab__board { grid-auto-columns: minmax(240px, 85vw); }
-    .cab__sheet dl { grid-template-columns: 1fr; gap: 2px 0; }
-    .cab__sheet dt { margin-top: 8px; }
-  }
-</style>
-
-<script>
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  СКРИПТ. Всё общение с бэком — через обёртку api(). Так не забыть credentials
-  //  (без него cookie сессии не поедет) и одинаково обработать 401.
-  // ─────────────────────────────────────────────────────────────────────────────
-  type User = { id: string; email: string; name: string; role: 'admin' | 'hr' | 'marketing' | 'viewer' };
-  let me: User | null = null;
-
-  const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel);
-  const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
-
-  // opts.auth401 — что делать на 401. На ручке логина 401 значит «неверный пароль»,
-  // разлогинивать там нечего, поэтому её зовём с auth401: false
-  async function api<T = any>(path: string, init: RequestInit = {}, opts: { auth401?: boolean } = {}): Promise<T> {
-    const res = await fetch(`/api/admin${path}`, {
-      ...init,
+  // ─────────── API ───────────
+  // auth401: false на ручке логина — там 401 значит «неверный пароль», разлогинивать нечего
+  async function api(path, init, opts) {
+    init = init || {};
+    opts = opts || {};
+    const res = await fetch('/api/admin' + path, {
+      method: init.method || 'GET',
+      body: init.body,
       credentials: 'same-origin',
-      headers: init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+      headers: init.body ? { 'Content-Type': 'application/json' } : undefined,
     });
     if (res.status === 401 && opts.auth401 !== false) {
-      me = null; renderAuth(); throw new Error('unauthorized');
+      me = null;
+      renderAuth();
+      throw new Error('unauthorized');
     }
-    return res.json() as Promise<T>;
+    if (opts.raw) return res;
+    return res.json();
   }
 
-  const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+  // ─────────── СПРАВОЧНИКИ ───────────
+  const LEAD_STATUS = {
+    new: { t: 'Новая', c: 'var(--info)' },
+    in_progress: { t: 'В работе', c: 'var(--warn)' },
+    archived: { t: 'Архив', c: 'var(--tx-3)' },
+    spam: { t: 'Спам', c: 'var(--bad)' },
+  };
+  const APP_STATUS = {
+    new: { t: 'Новые', c: 'var(--info)' },
+    screened: { t: 'Просмотрен', c: 'var(--warn)' },
+    invited: { t: 'Приглашён', c: 'var(--ok)' },
+    hired: { t: 'Принят', c: 'var(--ok)' },
+    rejected: { t: 'Отказ', c: 'var(--bad)' },
+  };
+  const VAC_STATUS = { open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' };
+  const EMP_STATUS = { active: { t: 'Работает', c: 'var(--ok)' }, prob: { t: 'Испытательный', c: 'var(--warn)' }, fired: { t: 'Уволен', c: 'var(--tx-3)' } };
+  const PAY_TYPES = { salary: 'Зарплата', bonus: 'Премия', advance: 'Аванс', vacation: 'Отпускные' };
+  const SOCIAL_STATUS = { active: { t: 'Ведётся', c: 'var(--ok)' }, paused: { t: 'Пауза', c: 'var(--warn)' }, closed: { t: 'Закрыта', c: 'var(--tx-3)' } };
+  const ROLES_RU = { admin: 'Администратор', hr: 'HR', marketing: 'Маркетолог', viewer: 'Наблюдатель' };
 
-  // Экранируем и одинарную кавычку: значения уходят не только в текст, но и в атрибуты.
-  // Сырое из базы в innerHTML — это готовый XSS, тут строго
-  const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+  const badge = (txt, color) =>
+    `<span class="badge" style="color:${color};background:color-mix(in srgb, ${color} 12%, transparent)">
+      <span class="dot"></span>${esc(txt)}</span>`;
 
-  // ---------- роли и вкладки ----------
+  // ─────────── МЕНЮ ПО РОЛЯМ ───────────
+  // У admin всё, у hr и marketing — только свои разделы. Настоящая защита на сервере,
+  // здесь лишь прячем то, что человеку не положено видеть
+  const NAV = [
+    { section: 'Работа', items: [
+      { id: 'overview', label: 'Обзор', roles: ['admin', 'hr', 'marketing'],
+        icon: '<path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>' },
+      { id: 'leads', label: 'Заявки', roles: ['admin', 'hr', 'marketing'], badge: 'leads',
+        icon: '<path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h10v4H4z"/>' },
+    ]},
+    { section: 'HR', items: [
+      { id: 'apps', label: 'Отклики', roles: ['admin', 'hr'], badge: 'apps',
+        icon: '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>' },
+      { id: 'vacancies', label: 'Вакансии', roles: ['admin', 'hr'],
+        icon: '<path d="M4 8h16v12H4z"/><path d="M9 8V5h6v3"/>' },
+      { id: 'employees', label: 'Сотрудники', roles: ['admin', 'hr'],
+        icon: '<circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/>' },
+      { id: 'payments', label: 'Выплаты', roles: ['admin', 'hr'],
+        icon: '<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>' },
+    ]},
+    { section: 'Маркетинг', items: [
+      { id: 'texts', label: 'Тексты', roles: ['admin', 'marketing'],
+        icon: '<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>' },
+      { id: 'media', label: 'Медиа', roles: ['admin', 'marketing'],
+        icon: '<path d="M3 5h18v14H3z"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/>' },
+      { id: 'social', label: 'Соцсети', roles: ['admin', 'marketing'],
+        icon: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/>' },
+      { id: 'stats', label: 'Статистика', roles: ['admin', 'marketing'],
+        icon: '<path d="M3 3v18h18M7 14l4-4 4 4 6-6"/>' },
+    ]},
+    { section: 'Система', items: [
+      { id: 'users', label: 'Пользователи', roles: ['admin'],
+        icon: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 2h6v4H9z"/>' },
+      { id: 'audit', label: 'Журнал', roles: ['admin'],
+        icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>' },
+    ]},
+  ];
+
+  const TITLES = {
+    overview: 'Обзор', leads: 'Заявки', apps: 'Отклики', vacancies: 'Вакансии',
+    employees: 'Сотрудники', payments: 'Выплаты', texts: 'Тексты сайта',
+    media: 'Медиатека', social: 'Группы соцсетей', stats: 'Статистика',
+    users: 'Пользователи', audit: 'Журнал действий',
+  };
+
+  // ─────────── ТЕМЫ ───────────
+  const THEMES = [
+    { id: 'apple', name: 'Apple', color: '#0071E3' },
+    { id: 'bitrix', name: 'Bitrix', color: '#2E8BFF' },
+    { id: 'erp', name: 'ERP', color: '#1A56DB' },
+    { id: 'skatinov', name: 'Бренд', color: '#7fd1ff' },
+    { id: 'dark', name: 'Тёмная', color: '#0E1016' },
+  ];
+
+  function initTheme() {
+    const box = $('#theme-switch');
+    box.innerHTML = THEMES.map((t) =>
+      `<button type="button" data-theme-id="${t.id}" title="${esc(t.name)}"
+        style="background:${t.color}"></button>`).join('');
+    const saved = localStorage.getItem('crm-theme') || 'apple';
+    setTheme(saved);
+    $$('[data-theme-id]', box).forEach((b) => {
+      b.addEventListener('click', () => setTheme(b.dataset.themeId));
+    });
+  }
+  function setTheme(id) {
+    document.documentElement.setAttribute('data-theme', id);
+    localStorage.setItem('crm-theme', id);
+    $$('[data-theme-id]').forEach((b) => b.classList.toggle('on', b.dataset.themeId === id));
+  }
+
+  // ─────────── ВХОД ───────────
   function renderAuth() {
-    $<HTMLElement>('#login').hidden = !!me;
-    $<HTMLElement>('#panels').hidden = !me;
+    $('#login').hidden = !!me;
+    $('#shell').hidden = !me;
     if (!me) return;
-    $<HTMLElement>('#cab-sub').textContent = `${me.name || me.email}, роль: ${me.role}`;
-    // Прячем вкладки, которые роли не положены. Это только UI, настоящая защита на сервере
-    $$('.cab__tab').forEach((tab) => {
-      const roles = (tab.dataset.roles ?? '').split(',');
-      tab.hidden = me!.role !== 'admin' && !roles.includes(me!.role);
-    });
-    const first = $$('.cab__tab').find((t) => !t.hidden);
-    if (first) openPanel(first.dataset.panel!);
-  }
 
-  function openPanel(name: string) {
-    $$('.cab__tab').forEach((t) => t.classList.toggle('is-active', t.dataset.panel === name));
-    $$('.cab__panel').forEach((p) => (p.hidden = p.dataset.panel !== name));
-    // Ленивая загрузка: не тянем все пять панелей сразу, открываем то, что человек реально смотрит
-    if (name === 'leads') loadLeads();
-    if (name === 'apps') { loadVacancyFilter(); loadApps(); }
-    if (name === 'hr') { loadHH(); loadVacancies(); }
-    if (name === 'texts') loadTexts();
-    if (name === 'media') loadMedia();
-  }
+    $('#user-name').textContent = me.name || me.email;
+    $('#user-role').textContent = ROLES_RU[me.role] || me.role;
+    $('#user-initial').textContent = (me.name || me.email).trim().charAt(0).toUpperCase();
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  КАНБАН. Одна функция на обе доски: у заявок и откликов разная только начинка карточки.
-  //  Массив items перерисовывается целиком — заявок десятки, дешевле перерисовать,
-  //  чем возиться с точечным перемещением узлов и рассинхроном.
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Заявки перешли на таблицу, канбан остался только у откликов:
-  // их мало и они реально текут по стадиям, а заявкам нужен список с суммой и выгрузкой
-  const COLUMNS = {
-    apps: [
-      { id: 'new', title: 'Новые' },
-      { id: 'screened', title: 'Просмотрен' },
-      { id: 'invited', title: 'Приглашён' },
-      { id: 'hired', title: 'Принят' },
-      { id: 'rejected', title: 'Отказ' },
-    ],
-  };
-
-  // Заявка старше суток без движения — повод ткнуть. Считаем на клиенте: сервер отдаёт created_at,
-  // а «висит третьи сутки» — это про бизнес, не про базу
-  const isStale = (iso: string) => Date.now() - new Date(iso).getTime() > 2 * 86_400_000;
-
-  let leads: any[] = [];
-  let apps: any[] = [];
-
-  function cardHTML(item: any) {
-    const vac = item.vacancy_slug ? ` · ${esc(item.vacancy_slug)}` : '';
-    return `<article class="cab__card" draggable="true" data-id="${esc(item.id)}">
-      <div class="cab__card-name">${esc(item.name) || 'Без имени'}</div>
-      <div class="cab__card-contact">${esc(item.contact) || '—'}</div>
-      <div class="cab__card-meta">${esc(item.source)}${vac} · ${fmt(item.created_at)}</div>
-    </article>`;
-  }
-
-  function drawBoard() {
-    const board = $<HTMLElement>('#board-apps');
-    board.innerHTML = COLUMNS.apps.map((col) => {
-      const inCol = apps.filter((i) => i.status === col.id);
-      const cards = inCol.length
-        ? inCol.map((i) => cardHTML(i)).join('')
-        : `<p class="cab__hint cab__hint--inline">Пусто</p>`;
-      return `<div class="cab__col" data-status="${col.id}">
-        <div class="cab__col-head"><span>${col.title}</span><span class="cab__col-n">${inCol.length}</span></div>
-        <div class="cab__cards">${cards}</div>
-      </div>`;
+    // Меню: только разделы своей роли
+    const nav = $('#nav');
+    nav.innerHTML = NAV.map((group) => {
+      const items = group.items.filter((it) => me.role === 'admin' || it.roles.includes(me.role));
+      if (!items.length) return '';
+      return `<div class="sb-section">${esc(group.section)}</div>` + items.map((it) =>
+        `<button class="sb-item" data-view="${it.id}">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">${it.icon}</svg>
+          <span>${esc(it.label)}</span>
+          ${it.badge ? `<span class="sb-badge" id="badge-${it.badge}" hidden>0</span>` : ''}
+        </button>`).join('');
     }).join('');
-    wireBoard();
+
+    $$('.sb-item').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
+
+    const first = $$('.sb-item')[0];
+    switchView(first ? first.dataset.view : 'overview');
+    refreshCounters();
+    // Опрос раз в минуту: заявки не идут потоком, а лишние запросы мешают читать логи
+    setInterval(refreshCounters, 60000);
   }
 
-  // Перетаскивание: нативный HTML5 drag&drop. Тянуть библиотеку на четыре колонки — оверкилл
-  function wireBoard() {
-    const board = $<HTMLElement>('#board-apps');
-    let draggedId: string | null = null;
-
-    board.querySelectorAll<HTMLElement>('.cab__card').forEach((card) => {
-      card.addEventListener('dragstart', () => {
-        draggedId = card.dataset.id!;
-        card.classList.add('is-drag');
-      });
-      card.addEventListener('dragend', () => card.classList.remove('is-drag'));
-      // Клик без перетаскивания открывает карточку. У откликов — резюме, у заявок — все поля формы
-      card.addEventListener('click', () => {
-        const item = apps.find((i) => i.id === card.dataset.id);
-        if (item) openCard(item, 'apps');
-      });
-    });
-
-    board.querySelectorAll<HTMLElement>('.cab__col').forEach((col) => {
-      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('is-over'); });
-      col.addEventListener('dragleave', () => col.classList.remove('is-over'));
-      col.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        col.classList.remove('is-over');
-        if (!draggedId) return;
-        const status = col.dataset.status!;
-        const item = apps.find((i) => i.id === draggedId);
-        if (!item || item.status === status) return;
-
-        // Оптимистично двигаем в памяти и перерисовываем сразу: ждать сеть на каждом
-        // перетаскивании — это задержка, из-за которой кажется, что drag&drop не работает
-        const prev = item.status;
-        item.status = status;
-        drawBoard();
-        try {
-          await api(`/applications/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
-          refreshCounters();
-        } catch {
-          item.status = prev; // сеть отвалилась — возвращаем как было, иначе интерфейс врёт
-          drawBoard();
-        }
-        draggedId = null;
-      });
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  КАРТОЧКА. Показываем всё, что реально лежит в базе: payload — вся форма целиком,
-  //  comment — заметка менеджера, ip_hash — по нему видно спам с одной машины.
-  // ─────────────────────────────────────────────────────────────────────────────
-  function openCard(item: any, kind: 'leads' | 'apps') {
-    const prev = kind === 'leads' ? item.comment : '';
-    const rows: [string, string][] = [];
-
-    if (kind === 'leads') {
-      rows.push(['Когда', fmt(item.created_at)]);
-      rows.push(['Откуда', `${esc(item.source)}${item.page ? ' · ' + esc(item.page) : ''}`]);
-      rows.push(['Имя', esc(item.name) || '—']);
-      rows.push(['Контакт', esc(item.contact) || '—']);
-      // payload приходит строкой JSON — разворачиваем, чтобы менеджер видел поля формы как есть
-      try {
-        const p = JSON.parse(item.payload || '{}');
-        Object.entries(p).forEach(([k, v]) => {
-          if (!v || ['name', 'contact'].includes(k)) return;
-          rows.push([esc(k), esc(typeof v === 'object' ? JSON.stringify(v) : v)]);
-        });
-      } catch { /* битый payload — не повод не открыть карточку */ }
-      if (item.ip_hash) rows.push(['Отпечаток IP', `<code>${esc(item.ip_hash.slice(0, 16))}…</code>`]);
-    } else {
-      rows.push(['Когда', fmt(item.created_at)]);
-      rows.push(['Источник', esc(item.source)]);
-      if (item.vacancy_slug) rows.push(['Вакансия', esc(item.vacancy_slug)]);
-      rows.push(['Имя', esc(item.name) || '—']);
-      rows.push(['Контакт', esc(item.contact) || '—']);
-      if (item.message) rows.push(['Сообщение', esc(item.message)]);
-      if (item.resume_url) rows.push(['Резюме', `<a href="/api/admin/files/${esc(item.resume_url)}" target="_blank" rel="noopener">Открыть</a>`]);
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const err = $('#login-err');
+    err.textContent = '';
+    try {
+      const res = await api('/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
+      }, { auth401: false });
+      if (!res.ok) {
+        // 429 — это лимит попыток, а не неверный пароль. Врать человеку нельзя
+        err.textContent = res.error === 'too_many_requests'
+          ? 'Слишком много попыток входа. Подождите минуту'
+          : 'Неверная почта или пароль';
+        return;
+      }
+      await boot();
+      if (!me) err.textContent = 'Вход прошёл, но браузер не сохранил сессию. Адрес должен быть http://localhost:4321';
+    } catch (ex) {
+      err.textContent = 'Сервер не отвечает';
     }
+  });
 
-    const sheet = $<HTMLElement>('#sheet');
-    $<HTMLElement>('#sheet-body').innerHTML = `
-      <h3>${esc(item.name) || 'Без имени'}</h3>
-      <p class="cab__sheet-sub">${esc(item.contact) || 'контакт не указан'}</p>
-      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
-      ${kind === 'leads' ? `<textarea class="cab__comment" id="sheet-comment" placeholder="Заметка: что обсудили, когда перезвонить">${esc(prev)}</textarea>` : ''}
-      <div class="cab__sheet-actions">
-        ${kind === 'leads' ? `<button class="cab__btn" id="sheet-save" type="button">Сохранить заметку</button>` : ''}
-        <a class="cab__btn cab__btn--ghost" href="tel:${esc(item.contact)}">Позвонить</a>
-        <button class="cab__btn cab__btn--ghost" id="sheet-close" type="button">Закрыть</button>
-      </div>`;
-    sheet.hidden = false;
+  $('#logout').addEventListener('click', async () => {
+    await api('/logout', { method: 'POST' }).catch(() => {});
+    me = null;
+    renderAuth();
+  });
 
-    $<HTMLElement>('#sheet-close').addEventListener('click', () => (sheet.hidden = true));
-    // Клик по фону закрывает: так привычнее, чем искать крестик
-    sheet.addEventListener('click', (e) => { if (e.target === sheet) sheet.hidden = true; });
-
-    const save = $('#sheet-save') as HTMLElement | null;
-    save?.addEventListener('click', async () => {
-      const comment = ($('#sheet-comment') as HTMLTextAreaElement).value.trim();
-      await api(`/leads/${item.id}`, { method: 'PATCH', body: JSON.stringify({ comment }) });
-      item.comment = comment;
-      sheet.hidden = true;
-      loadLeads();
-    });
+  async function refreshCounters() {
+    const c = await api('/counters').catch(() => null);
+    if (!c || !c.ok) return;
+    const put = (id, n) => {
+      const el = $('#badge-' + id);
+      if (!el) return;
+      el.textContent = n;
+      el.hidden = n === 0;
+    };
+    put('leads', c.leads_new);
+    put('apps', c.apps_new);
+    document.title = c.leads_new > 0 ? '(' + c.leads_new + ') Кабинет' : 'Кабинет';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ЗАГРУЗКА ДАННЫХ
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ТАБЛИЦА ЗАЯВОК. Список, а не карточки: нужны сортировка по сумме, выгрузка
-  //  и правка на месте. Сортировку держим на клиенте — заявок десятки, тянуть её
-  //  на сервер запросом с ORDER BY смысла нет, а фильтр по статусу всё равно уходит в SQL
-  // ─────────────────────────────────────────────────────────────────────────────
-  const STATUS_RU: Record<string, string> = {
-    new: 'Новая', in_progress: 'В работе', archived: 'Архив', spam: 'Спам',
-  };
-  let sortKey = 'created_at';
-  let sortDir: 1 | -1 = -1;
+  // ─────────── ПЕРЕКЛЮЧЕНИЕ ЭКРАНОВ ───────────
+  function switchView(id) {
+    view = id;
+    $$('.sb-item').forEach((b) => b.classList.toggle('on', b.dataset.view === id));
+    $('#view-title').textContent = TITLES[id] || id;
+    $('#top-actions').innerHTML = '';
+    $('#content').innerHTML = '<p class="hint">Загрузка…</p>';
+    const fn = VIEWS[id];
+    if (fn) fn();
+    else $('#content').innerHTML = '<p class="hint">Раздел в разработке</p>';
+  }
 
-  const money = (v: unknown) =>
-    v == null || v === '' ? '—' : Number(v).toLocaleString('ru-RU') + ' ₽';
+  // ─────────── ОБЗОР ───────────
+  async function viewOverview() {
+    const [leads, apps, social] = await Promise.all([
+      api('/leads?limit=200').catch(() => ({ items: [] })),
+      api('/applications').catch(() => ({ items: [] })),
+      api('/social').catch(() => ({ items: [] })),
+    ]);
+    const L = leads.items || [];
+    const A = apps.items || [];
+    const newLeads = L.filter((l) => l.status === 'new').length;
+    const inWork = L.filter((l) => l.status === 'in_progress').length;
+    const total = L.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    const newApps = A.filter((a) => a.status === 'new').length;
 
-  // value — то, что подставляем в input, data-атрибут — то, что читаем при сохранении.
-  // Разделяем намеренно: экранирование одно, но в атрибут нельзя тащить кавычки
-  function leadRow(l: any) {
-    const badge = l.status === 'new' ? ' cab__badge--new' : '';
-    return `<tr data-id="${esc(l.id)}">
-      <td class="cab__td-date">${fmt(l.created_at)}</td>
-      <td>
-        <input class="cab__cell" data-field="name" value="${esc(l.name)}" />
-        <div class="cab__cell-sub">${esc(l.contact)} · ${esc(l.source)}</div>
-      </td>
-      <td><input class="cab__cell" data-field="object" value="${esc(l.object ?? '')}" placeholder="—" /></td>
-      <td><input class="cab__cell cab__cell--num" data-field="amount" type="number" min="0" step="1000"
-                 value="${l.amount ?? ''}" placeholder="—" /></td>
-      <td>
-        <select class="cab__cell" data-field="status">
-          ${Object.entries(STATUS_RU).map(([k, t]) =>
-            `<option value="${k}"${l.status === k ? ' selected' : ''}>${t}</option>`).join('')}
+    $('#content').innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="k-label">Новые заявки</div><div class="k-val">${newLeads}</div>
+          <div class="k-sub">ждут первого звонка</div></div>
+        <div class="kpi"><div class="k-label">В работе</div><div class="k-val">${inWork}</div>
+          <div class="k-sub">взяты менеджером</div></div>
+        <div class="kpi"><div class="k-label">Сумма заявок</div><div class="k-val">${total.toLocaleString('ru-RU')} ₽</div>
+          <div class="k-sub">по всем, включая архив</div></div>
+        <div class="kpi"><div class="k-label">Новые отклики</div><div class="k-val">${newApps}</div>
+          <div class="k-sub">на вакансии</div></div>
+      </div>
+      <h2 style="font-size:16px;margin:0 0 12px">Последние заявки</h2>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Дата</th><th>Клиент</th><th>Объект</th><th class="num">Сумма</th><th>Статус</th></tr></thead>
+        <tbody>${L.slice(0, 8).map((l) => `<tr>
+          <td class="nowrap muted">${esc(fmtDate(l.created_at))}</td>
+          <td><b>${esc(l.name) || 'Без имени'}</b><div class="muted">${esc(l.contact)}</div></td>
+          <td>${esc(l.object) || '<span class="muted">—</span>'}</td>
+          <td class="num">${money(l.amount)}</td>
+          <td>${badge(LEAD_STATUS[l.status] ? LEAD_STATUS[l.status].t : l.status, LEAD_STATUS[l.status] ? LEAD_STATUS[l.status].c : 'var(--tx-3)')}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">Заявок нет</td></tr>'}</tbody>
+      </table></div>
+
+      <h2 style="font-size:16px;margin:24px 0 12px">Группы соцсетей</h2>
+      <div class="kpis">${(social.items || []).map((g) => `
+        <div class="kpi"><div class="k-label">${esc(g.net)}</div>
+          <div class="k-val">${Number(g.members).toLocaleString('ru-RU')}</div>
+          <div class="k-sub">${esc(g.name)} · вовлечённость ${g.engagement}%</div></div>`).join('')
+        || '<p class="hint">Групп пока нет</p>'}</div>`;
+  }
+
+  // ─────────── ЗАЯВКИ: 4 РЕЖИМА ───────────
+  // Режим храним в localStorage: человек привыкает к одному виду и не хочет
+  // каждый раз переключать заново
+  let leadMode = localStorage.getItem('crm-leads-mode') || 'table';
+  let leadSort = { key: 'created_at', dir: -1 };
+
+  async function viewLeads() {
+    $('#content').innerHTML = `
+      <div class="bar">
+        <div class="seg" id="lead-mode">
+          <button data-mode="table">Таблица</button>
+          <button data-mode="kanban">Канбан</button>
+          <button data-mode="cards">Карточки</button>
+          <button data-mode="archive">Архив</button>
+        </div>
+        <input id="f-q" type="search" placeholder="Имя, контакт или объект" />
+        <select id="f-status">
+          <option value="">Все статусы</option>
+          ${Object.keys(LEAD_STATUS).map((k) => `<option value="${k}">${LEAD_STATUS[k].t}</option>`).join('')}
         </select>
-      </td>
-      <td><input class="cab__cell" data-field="assigned_to" value="${esc(l.assigned_to ?? '')}" placeholder="—" /></td>
-      <td class="cab__td-actions">
-        ${l.status === 'new' ? `<span class="cab__badge${badge}">новая</span>` : ''}
-        <button class="cab__icon" data-open="${esc(l.id)}" title="Все поля заявки" type="button">⋯</button>
-        ${me?.role === 'admin' ? `<button class="cab__icon cab__icon--del" data-del="${esc(l.id)}" title="Удалить" type="button">×</button>` : ''}
-      </td>
-    </tr>`;
+        <select id="f-source">
+          <option value="">Все источники</option>
+          <option value="modal">Окно заявки</option>
+          <option value="quiz">Квиз</option>
+          <option value="contacts">Контакты</option>
+          <option value="resume">Резюме</option>
+          <option value="manual">Заведена вручную</option>
+        </select>
+        <button class="btn" id="lead-add" type="button">Добавить</button>
+        <a class="btn btn--ghost" href="/api/admin/leads/export">Выгрузить</a>
+      </div>
+      <form class="formbox" id="lead-form" hidden>
+        <input name="name" placeholder="Имя клиента" required />
+        <input name="contact" placeholder="Телефон или почта" required />
+        <input name="object" placeholder="Объект" />
+        <input name="amount" type="number" min="0" step="1000" placeholder="Сумма, ₽" />
+        <select name="status">
+          <option value="new">Новая</option><option value="in_progress">В работе</option>
+        </select>
+        <textarea name="comment" rows="2" placeholder="Примечание"></textarea>
+        <div class="f-actions">
+          <button class="btn" type="submit">Сохранить</button>
+          <button class="btn btn--ghost" type="button" id="lead-cancel">Отмена</button>
+        </div>
+      </form>
+      <div id="lead-area"><p class="hint">Загрузка…</p></div>`;
+
+    $$('#lead-mode button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.mode === leadMode);
+      b.addEventListener('click', () => {
+        leadMode = b.dataset.mode;
+        localStorage.setItem('crm-leads-mode', leadMode);
+        $$('#lead-mode button').forEach((x) => x.classList.toggle('on', x.dataset.mode === leadMode));
+        drawLeads();
+      });
+    });
+
+    let t;
+    ['#f-q', '#f-status', '#f-source'].forEach((sel) => {
+      const el = $(sel);
+      el.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(loadLeads, sel === '#f-q' ? 350 : 0);
+      });
+    });
+
+    $('#lead-add').addEventListener('click', () => {
+      const f = $('#lead-form');
+      f.hidden = !f.hidden;
+      if (!f.hidden) $('[name=name]', f).focus();
+    });
+    $('#lead-cancel').addEventListener('click', () => { $('#lead-form').hidden = true; });
+    $('#lead-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const body = {};
+      new FormData(form).forEach((v, k) => { if (v !== '') body[k] = v; });
+      await api('/leads', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+      form.reset();
+      form.hidden = true;
+      loadLeads();
+      refreshCounters();
+    });
+
+    loadLeads();
   }
 
   async function loadLeads() {
-    const q = $<HTMLInputElement>('#f-q').value.trim();
-    const status = $<HTMLSelectElement>('#f-status').value;
-    const source = $<HTMLSelectElement>('#f-source').value;
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (status) params.set('status', status);
-    if (source) params.set('source', source);
-
-    const { items } = await api<any>(`/leads?${params}`).catch(() => ({ items: [] }));
-    leads = items;
+    const q = $('#f-q') ? $('#f-q').value.trim() : '';
+    const st = $('#f-status') ? $('#f-status').value : '';
+    const src = $('#f-source') ? $('#f-source').value : '';
+    const p = new URLSearchParams();
+    if (q) p.set('q', q);
+    if (st) p.set('status', st);
+    if (src) p.set('source', src);
+    const res = await api('/leads?' + p.toString()).catch(() => ({ items: [] }));
+    cache.leads = res.items || [];
     drawLeads();
   }
 
   function drawLeads() {
-    const body = $<HTMLElement>('#leads-body');
-    if (!leads.length) {
-      body.innerHTML = `<tr><td colspan="7" class="cab__td-empty">Заявок нет. Измените фильтры или добавьте вручную.</td></tr>`;
-      $<HTMLElement>('#leads-sum').textContent = '';
+    const area = $('#lead-area');
+    if (!area) return;
+    const all = cache.leads || [];
+
+    if (leadMode === 'table') {
+      const sorted = all.slice().sort((a, b) => {
+        const x = a[leadSort.key], y = b[leadSort.key];
+        if (x === null || x === undefined) return 1;
+        if (y === null || y === undefined) return -1;
+        const cmp = typeof x === 'number' && typeof y === 'number'
+          ? x - y : String(x).localeCompare(String(y), 'ru');
+        return cmp * leadSort.dir;
+      });
+      const total = all.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+      area.innerHTML = `<div class="tbl-wrap"><table class="tbl" id="lead-tbl">
+        <thead><tr>
+          <th data-sort="created_at">Дата</th><th data-sort="name">Клиент</th>
+          <th data-sort="object">Объект</th><th data-sort="amount" class="num">Сумма</th>
+          <th data-sort="status">Статус</th><th data-sort="assigned_to">Ответственный</th><th></th>
+        </tr></thead>
+        <tbody>${sorted.map(leadRow).join('') ||
+          '<tr><td colspan="7" class="empty">Заявок нет. Измените фильтры или добавьте вручную.</td></tr>'}</tbody>
+      </table></div>
+      <p class="sumline">Заявок: ${all.length}. Сумма: ${total.toLocaleString('ru-RU')} ₽</p>`;
+      wireLeadTable();
+      $$('#lead-tbl th[data-sort]').forEach((th) => {
+        th.classList.toggle('sorted-desc', leadSort.key === th.dataset.sort && leadSort.dir === -1);
+        th.classList.toggle('sorted-asc', leadSort.key === th.dataset.sort && leadSort.dir === 1);
+        th.addEventListener('click', () => {
+          const k = th.dataset.sort;
+          if (leadSort.key === k) leadSort.dir = leadSort.dir === -1 ? 1 : -1;
+          else leadSort = { key: k, dir: k === 'created_at' || k === 'amount' ? -1 : 1 };
+          drawLeads();
+        });
+      });
       return;
     }
-    // Копию сортируем, чтобы не переставлять исходный массив: по нему работает поиск карточки
-    const sorted = [...leads].sort((a, b) => {
-      const x = a[sortKey], y = b[sortKey];
-      if (x == null) return 1;          // пустые всегда вниз, независимо от направления
-      if (y == null) return -1;
-      const cmp = typeof x === 'number' && typeof y === 'number'
-        ? x - y
-        : String(x).localeCompare(String(y), 'ru');
-      return cmp * sortDir;
-    });
-    body.innerHTML = sorted.map(leadRow).join('');
 
-    // Итог по сумме — по отфильтрованному списку, не по всей базе: иначе цифра не бьётся с тем, что видно
-    const total = leads.reduce((acc, l) => acc + (Number(l.amount) || 0), 0);
-    $<HTMLElement>('#leads-sum').textContent =
-      `Заявок: ${leads.length}. Сумма: ${total.toLocaleString('ru-RU')} ₽`;
-    wireLeads();
+    if (leadMode === 'kanban') {
+      const cols = Object.keys(LEAD_STATUS);
+      area.innerHTML = `<div class="kanban">${cols.map((s) => {
+        const inCol = all.filter((l) => l.status === s);
+        return `<div class="kcol" data-status="${s}">
+          <div class="kcol-head"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:${LEAD_STATUS[s].c}"></span>
+            ${LEAD_STATUS[s].t}<span class="kcol-n">${inCol.length}</span></div>
+          <div class="klist">${inCol.map((l) => `
+            <article class="kcard" draggable="true" data-id="${esc(l.id)}">
+              <div class="k-name">${esc(l.name) || 'Без имени'}</div>
+              <div class="k-contact">${esc(l.contact)}</div>
+              ${l.object ? `<div class="k-meta">${esc(l.object)}</div>` : ''}
+              <div class="k-amount">${money(l.amount)}</div>
+            </article>`).join('') || '<p class="hint" style="margin:6px">Пусто</p>'}</div>
+        </div>`;
+      }).join('')}</div>`;
+      wireKanban(area, function (id, status) {
+        const item = (cache.leads || []).find((l) => l.id === id);
+        if (item) item.status = status;
+        drawLeads();
+      });
+      return;
+    }
+
+    if (leadMode === 'cards') {
+      area.innerHTML = `<div class="cards">${all.map((l) => `
+        <div class="card" data-open="${esc(l.id)}">
+          <div class="c-top">
+            <div class="c-name">${esc(l.name) || 'Без имени'}</div>
+            ${badge(LEAD_STATUS[l.status] ? LEAD_STATUS[l.status].t : l.status,
+              LEAD_STATUS[l.status] ? LEAD_STATUS[l.status].c : 'var(--tx-3)')}
+          </div>
+          <div class="c-amount">${money(l.amount)}</div>
+          <div class="c-row"><span>${esc(l.object) || 'Объект не указан'}</span></div>
+          <div class="c-row"><span>${esc(l.contact)}</span><span>${esc(fmtDate(l.created_at))}</span></div>
+        </div>`).join('') || '<p class="hint">Заявок нет</p>'}</div>`;
+      wireOpenCards(area);
+      return;
+    }
+
+    // Архив: только завершённые и спам, отдельно от рабочего списка
+    const arch = all.filter((l) => l.status === 'archived' || l.status === 'spam');
+    area.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Дата</th><th>Клиент</th><th>Объект</th><th class="num">Сумма</th><th>Статус</th><th>Заметка</th><th></th></tr></thead>
+      <tbody>${arch.map((l) => `<tr>
+        <td class="nowrap muted">${esc(fmtDate(l.created_at))}</td>
+        <td><b>${esc(l.name)}</b><div class="muted">${esc(l.contact)}</div></td>
+        <td>${esc(l.object) || '<span class="muted">—</span>'}</td>
+        <td class="num">${money(l.amount)}</td>
+        <td>${badge(LEAD_STATUS[l.status].t, LEAD_STATUS[l.status].c)}</td>
+        <td class="muted">${esc(l.comment) || '—'}</td>
+        <td><button class="icon-btn" data-open="${esc(l.id)}" title="Открыть">⋯</button></td>
+      </tr>`).join('') || '<tr><td colspan="7" class="empty">В архиве пусто</td></tr>'}</tbody>
+    </table></div>`;
+    wireOpenCards(area);
   }
 
-  function wireLeads() {
-    const body = $<HTMLElement>('#leads-body');
+  function leadRow(l) {
+    return `<tr data-id="${esc(l.id)}">
+      <td class="nowrap muted">${esc(fmtDate(l.created_at))}</td>
+      <td>
+        <input class="cell" data-field="name" value="${esc(l.name)}" />
+        <div class="muted" style="padding:0 7px">${esc(l.contact)} · ${esc(l.source)}</div>
+      </td>
+      <td><input class="cell" data-field="object" value="${esc(l.object || '')}" placeholder="—" /></td>
+      <td class="num"><input class="cell num" data-field="amount" type="number" min="0" step="1000"
+            value="${l.amount === null || l.amount === undefined ? '' : l.amount}" placeholder="—" /></td>
+      <td><select class="cell" data-field="status">
+        ${Object.keys(LEAD_STATUS).map((k) =>
+          `<option value="${k}"${l.status === k ? ' selected' : ''}>${LEAD_STATUS[k].t}</option>`).join('')}
+      </select></td>
+      <td><input class="cell" data-field="assigned_to" value="${esc(l.assigned_to || '')}" placeholder="—" /></td>
+      <td class="nowrap" style="text-align:right">
+        <button class="icon-btn" data-open="${esc(l.id)}" title="Все поля">⋯</button>
+        ${me.role === 'admin' ? `<button class="icon-btn del" data-del="${esc(l.id)}" title="Удалить">×</button>` : ''}
+      </td>
+    </tr>`;
+  }
 
-    // Правка на месте: любое изменение поля уходит на сервер сразу.
-    // Кнопку «сохранить» на каждую строку не ставим — менеджер забудет её нажать,
-    // и данные разойдутся с тем, что он видит
-    body.querySelectorAll<HTMLInputElement | HTMLSelectElement>('.cab__cell').forEach((el) => {
+  function wireLeadTable() {
+    $$('#lead-tbl .cell').forEach((el) => {
       el.addEventListener('change', async () => {
-        const tr = el.closest('tr')!;
-        const field = el.dataset.field!;
+        const tr = el.closest('tr');
+        const field = el.dataset.field;
         const raw = el.value;
-        // Пустую сумму отправляем нулём: сервер поймёт, что поле очистили
-        const value = field === 'amount' ? (raw === '' ? '' : Number(raw)) : raw;
+        const val = field === 'amount' ? (raw === '' ? '' : Number(raw)) : raw;
+        const body = {};
+        body[field] = val;
         try {
-          await api(`/leads/${tr.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ [field]: value }) });
-          const item = leads.find((l) => l.id === tr.dataset.id);
-          if (item) item[field] = value;
-          el.classList.add('cab__cell--saved');
-          setTimeout(() => el.classList.remove('cab__cell--saved'), 900);
-          // Статус мог смениться — пересчитываем итог и бейджи
+          await api('/leads/' + tr.dataset.id, { method: 'PATCH', body: JSON.stringify(body) });
+          const item = (cache.leads || []).find((l) => l.id === tr.dataset.id);
+          if (item) item[field] = val;
+          el.classList.add('saved');
+          setTimeout(() => el.classList.remove('saved'), 900);
           if (field === 'status' || field === 'amount') drawLeads();
           refreshCounters();
-        } catch {
-          el.classList.add('cab__cell--err');
-          setTimeout(() => el.classList.remove('cab__cell--err'), 1500);
+        } catch (e) {
+          el.classList.add('failed');
+          setTimeout(() => el.classList.remove('failed'), 1500);
         }
       });
     });
-
-    body.querySelectorAll<HTMLElement>('[data-open]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const item = leads.find((l) => l.id === btn.dataset.open);
-        if (item) openCard(item, 'leads');
-      });
-    });
-
-    body.querySelectorAll<HTMLElement>('[data-del]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        // Подтверждение обязательно: удаление заявки необратимо и это персданные
+    wireOpenCards($('#lead-tbl'));
+    $$('#lead-tbl [data-del]').forEach((b) => {
+      b.addEventListener('click', async () => {
         if (!confirm('Удалить заявку безвозвратно?')) return;
-        await api(`/leads/${btn.dataset.del}`, { method: 'DELETE' }).catch(() => {});
+        await api('/leads/' + b.dataset.del, { method: 'DELETE' }).catch(() => {});
         loadLeads();
         refreshCounters();
       });
     });
   }
 
-  async function loadApps() {
-    const vacancy = $<HTMLSelectElement>('#f-vacancy').value;
-    const params = new URLSearchParams();
-    if (vacancy) params.set('vacancy', vacancy);
-    const { items } = await api<any>(`/applications?${params}`).catch(() => ({ items: [] }));
-    apps = items;
-    drawBoard();
+  function wireOpenCards(root) {
+    $$('[data-open]', root).forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('input, select, textarea')) return;
+        const item = (cache.leads || []).find((l) => l.id === el.dataset.open);
+        if (item) openLead(item);
+      });
+    });
   }
 
-  async function loadVacancyFilter() {
-    const { items } = await api<any>('/vacancies').catch(() => ({ items: [] }));
-    const sel = $<HTMLSelectElement>('#f-vacancy');
-    const cur = sel.value;
-    sel.innerHTML = `<option value="">Все вакансии</option>` +
-      items.map((v: any) => `<option value="${esc(v.slug)}">${esc(v.title)}</option>`).join('');
-    sel.value = cur;
+  // Перетаскивание в канбане. Оптимистично меняем в памяти и перерисовываем сразу:
+  // ждать сеть на каждом броске — это задержка, из-за которой кажется, что не работает
+  function wireKanban(root, onDrop) {
+    let dragId = null;
+    $$('.kcard', root).forEach((card) => {
+      card.addEventListener('dragstart', () => { dragId = card.dataset.id; card.classList.add('dragging'); });
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
+      card.addEventListener('click', () => {
+        const item = (cache.leads || []).find((l) => l.id === card.dataset.id);
+        if (item) openLead(item);
+      });
+    });
+    $$('.kcol', root).forEach((col) => {
+      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('over'); });
+      col.addEventListener('dragleave', () => col.classList.remove('over'));
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        col.classList.remove('over');
+        if (!dragId) return;
+        const status = col.dataset.status;
+        const item = (cache.leads || []).find((l) => l.id === dragId);
+        if (!item || item.status === status) return;
+        const prev = item.status;
+        onDrop(dragId, status);
+        try {
+          await api('/leads/' + dragId, { method: 'PATCH', body: JSON.stringify({ status: status }) });
+          refreshCounters();
+        } catch (err) {
+          onDrop(dragId, prev); // сеть отвалилась — возвращаем, иначе интерфейс врёт
+        }
+        dragId = null;
+      });
+    });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  УВЕДОМЛЕНИЯ. Кабинет опрашивает счётчики раз в минуту. Отдельная ручка, а не списки:
-  //  тянуть полные заявки по таймеру — это трафик на пустом месте.
-  //  Заголовок вкладки браузера меняем тоже — человек часто сидит в другой вкладке.
-  // ─────────────────────────────────────────────────────────────────────────────
-  let lastNew = -1;
+  // ─────────── ДЕТАЛИ ЗАЯВКИ ───────────
+  function openLead(l) {
+    const rows = [];
+    rows.push(['Когда', esc(fmtDate(l.created_at))]);
+    rows.push(['Источник', esc(l.source) + (l.page ? ' · ' + esc(l.page) : '')]);
+    rows.push(['Контакт', esc(l.contact) || '—']);
+    rows.push(['Объект', esc(l.object) || '—']);
+    rows.push(['Сумма', money(l.amount)]);
+    rows.push(['Статус', LEAD_STATUS[l.status] ? LEAD_STATUS[l.status].t : esc(l.status)]);
+    // payload — вся форма с сайта. Показываем, чтобы менеджер не спрашивал то, что клиент уже написал
+    try {
+      const p = JSON.parse(l.payload || '{}');
+      Object.keys(p).forEach((k) => {
+        const v = p[k];
+        if (!v || k === 'name' || k === 'contact') return;
+        rows.push([esc(k), esc(typeof v === 'object' ? JSON.stringify(v) : v)]);
+      });
+    } catch (e) { /* битый payload — не повод не открыть карточку */ }
 
-  async function refreshCounters() {
-    const c = await api<any>('/counters').catch(() => null);
-    if (!c?.ok) return;
+    openSheet(`<h3>${esc(l.name) || 'Без имени'}</h3>
+      <p class="sh-sub">${esc(l.contact)}</p>
+      <dl>${rows.map((r) => `<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl>
+      <textarea id="sh-comment" placeholder="Заметка: что обсудили, когда перезвонить">${esc(l.comment || '')}</textarea>
+      <div class="sh-actions">
+        <button class="btn" id="sh-save" type="button">Сохранить заметку</button>
+        <a class="btn btn--ghost" href="tel:${esc(l.contact)}">Позвонить</a>
+        <button class="btn btn--ghost" id="sh-close" type="button">Закрыть</button>
+      </div>`);
 
-    const setCount = (id: string, n: number) => {
-      const el = $<HTMLElement>(id);
-      el.textContent = String(n);
-      el.hidden = n === 0;
-    };
-    setCount('#cnt-leads', c.leads_new);
-    setCount('#cnt-apps', c.apps_new);
-    document.title = c.leads_new > 0 ? `(${c.leads_new}) Кабинет` : 'Кабинет';
-
-    // lastNew = -1 на первом опросе: иначе при входе всплывала бы плашка про старые заявки
-    if (lastNew >= 0 && c.leads_new > lastNew) {
-      const toast = $<HTMLElement>('#toast');
-      toast.textContent = `Новая заявка. Всего необработанных: ${c.leads_new}`;
-      toast.hidden = false;
-      setTimeout(() => (toast.hidden = true), 8000);
-    }
-    lastNew = c.leads_new;
+    $('#sh-close').addEventListener('click', closeSheet);
+    $('#sh-save').addEventListener('click', async () => {
+      const comment = $('#sh-comment').value.trim();
+      await api('/leads/' + l.id, { method: 'PATCH', body: JSON.stringify({ comment: comment }) });
+      l.comment = comment;
+      closeSheet();
+      loadLeads();
+    });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ВАКАНСИИ
-  // ─────────────────────────────────────────────────────────────────────────────
-  const VAC_STATUS = { open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' };
+  function openSheet(html) {
+    $('#sheet').innerHTML = html;
+    $('#modal').hidden = false;
+  }
+  function closeSheet() { $('#modal').hidden = true; }
+  $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) closeSheet(); });
 
-  async function loadVacancies() {
-    const { items } = await api<any>('/vacancies').catch(() => ({ items: [] }));
-    const box = $<HTMLElement>('#vac-list');
-    if (!items.length) { box.textContent = 'Вакансий нет. Они приходят из HH после синхронизации.'; return; }
-    box.innerHTML = items.map((v: any) => `
-      <div class="cab__row">
-        <div>
-          <b>${esc(v.title)}</b>
-          <small>${esc(v.slug)}${v.hh_url ? ' · есть на HH' : ''} · обновлено ${fmt(v.updated_at)}</small>
+  // ─────────── ОТКЛИКИ (канбан) ───────────
+  async function viewApps() {
+    const res = await api('/applications').catch(() => ({ items: [] }));
+    cache.apps = res.items || [];
+    const cols = Object.keys(APP_STATUS);
+    $('#content').innerHTML = `<p class="hint">Перетащите карточку, чтобы сменить стадию. Резюме открывается по ссылке.</p>
+      <div class="kanban">${cols.map((s) => {
+        const inCol = cache.apps.filter((a) => a.status === s);
+        return `<div class="kcol" data-status="${s}">
+          <div class="kcol-head"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:${APP_STATUS[s].c}"></span>
+            ${APP_STATUS[s].t}<span class="kcol-n">${inCol.length}</span></div>
+          <div class="klist">${inCol.map((a) => `
+            <article class="kcard" draggable="true" data-id="${esc(a.id)}">
+              <div class="k-name">${esc(a.name) || 'Без имени'}</div>
+              <div class="k-contact">${esc(a.contact)}</div>
+              <div class="k-meta">${esc(a.vacancy_slug || a.source)}</div>
+              ${a.resume_url ? `<a href="/api/admin/files/${esc(a.resume_url)}" target="_blank" rel="noopener" style="font-size:12px">Резюме</a>` : ''}
+            </article>`).join('') || '<p class="hint" style="margin:6px">Пусто</p>'}</div>
+        </div>`;
+      }).join('')}</div>`;
+
+    let dragId = null;
+    $$('.kcard').forEach((card) => {
+      card.addEventListener('dragstart', () => { dragId = card.dataset.id; card.classList.add('dragging'); });
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    });
+    $$('.kcol').forEach((col) => {
+      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('over'); });
+      col.addEventListener('dragleave', () => col.classList.remove('over'));
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        col.classList.remove('over');
+        if (!dragId) return;
+        const item = cache.apps.find((a) => a.id === dragId);
+        if (!item || item.status === col.dataset.status) { dragId = null; return; }
+        await api('/applications/' + dragId, { method: 'PATCH', body: JSON.stringify({ status: col.dataset.status }) })
+          .catch(() => {});
+        dragId = null;
+        viewApps();
+        refreshCounters();
+      });
+    });
+  }
+
+  // ─────────── ВАКАНСИИ ───────────
+  async function viewVacancies() {
+    const [hh, vac] = await Promise.all([
+      api('/hh/status').catch(() => null),
+      api('/vacancies').catch(() => ({ items: [] })),
+    ]);
+    const hhText = !hh || !hh.ok ? 'Статус недоступен'
+      : hh.configured
+        ? (hh.connected ? 'Подключено к HH' : 'Ключи есть, авторизация не пройдена')
+        : 'Ключи приложения не заданы (HH_CLIENT_ID и HH_CLIENT_SECRET в .env)';
+
+    $('#content').innerHTML = `
+      <div class="formbox" style="display:block">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <b>HH.ru</b><span class="hint" style="margin:0">${esc(hhText)}</span>
+          <span style="margin-left:auto;display:flex;gap:9px">
+            <a class="btn btn--ghost btn--sm" href="/api/admin/hh/auth" target="_blank" rel="noopener">Подключить</a>
+            <button class="btn btn--ghost btn--sm" id="hh-sync" type="button">Синхронизировать</button>
+          </span>
         </div>
-        <select data-slug="${esc(v.slug)}" class="vac-status">
-          ${Object.entries(VAC_STATUS).map(([k, t]) =>
-            `<option value="${k}"${v.status === k ? ' selected' : ''}>${t}</option>`).join('')}
-        </select>
-      </div>`).join('');
+        <p class="warn">Получение откликов у HH платное — пакетами запросов. Не жмите синхронизацию без нужды.</p>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Вакансия</th><th>Код</th><th>На HH</th><th>Обновлена</th><th>Статус</th></tr></thead>
+        <tbody>${(vac.items || []).map((v) => `<tr data-slug="${esc(v.slug)}">
+          <td><b>${esc(v.title)}</b></td>
+          <td class="muted">${esc(v.slug)}</td>
+          <td>${v.hh_url ? `<a href="${esc(v.hh_url)}" target="_blank" rel="noopener">Открыть</a>` : '<span class="muted">нет</span>'}</td>
+          <td class="muted nowrap">${esc(fmtDate(v.updated_at))}</td>
+          <td><select class="cell" data-vac-status>
+            ${Object.keys(VAC_STATUS).map((k) =>
+              `<option value="${k}"${v.status === k ? ' selected' : ''}>${VAC_STATUS[k]}</option>`).join('')}
+          </select></td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">Вакансий нет. Они приходят из HH после синхронизации.</td></tr>'}</tbody>
+      </table></div>`;
 
-    box.querySelectorAll<HTMLSelectElement>('.vac-status').forEach((sel) => {
+    $$('[data-vac-status]').forEach((sel) => {
       sel.addEventListener('change', async () => {
-        await api(`/vacancies/${encodeURIComponent(sel.dataset.slug!)}`, {
+        const slug = sel.closest('tr').dataset.slug;
+        await api('/vacancies/' + encodeURIComponent(slug), {
           method: 'PATCH', body: JSON.stringify({ status: sel.value }),
         }).catch(() => {});
+        sel.classList.add('saved');
+        setTimeout(() => sel.classList.remove('saved'), 900);
+      });
+    });
+    $('#hh-sync').addEventListener('click', async () => {
+      const btn = $('#hh-sync');
+      btn.textContent = 'Синхронизирую…';
+      const r = await api('/hh/sync', { method: 'POST' }).catch(() => null);
+      btn.textContent = 'Синхронизировать';
+      toast(r && r.ok ? 'Синхронизация прошла' : 'Не удалось: ' + ((r && r.error) || 'нет ответа'));
+    });
+  }
+
+  // ─────────── СОТРУДНИКИ ───────────
+  async function viewEmployees() {
+    const res = await api('/employees').catch(() => ({ items: [] }));
+    cache.employees = res.items || [];
+    $('#top-actions').innerHTML = '<button class="btn" id="emp-add" type="button">Добавить сотрудника</button>';
+
+    const draw = () => {
+      $('#content').innerHTML = `
+        <form class="formbox" id="emp-form" hidden>
+          <input name="name" placeholder="ФИО" required />
+          <input name="dept" placeholder="Отдел" />
+          <input name="pos" placeholder="Должность" />
+          <input name="phone" placeholder="Телефон" />
+          <input name="email" placeholder="Почта" />
+          <input name="hire" type="date" />
+          <input name="salary" type="number" min="0" step="1000" placeholder="Оклад, ₽" />
+          <select name="status">
+            <option value="active">Работает</option><option value="prob">Испытательный</option>
+            <option value="fired">Уволен</option>
+          </select>
+          <div class="f-actions">
+            <button class="btn" type="submit">Сохранить</button>
+            <button class="btn btn--ghost" type="button" id="emp-cancel">Отмена</button>
+          </div>
+        </form>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>ФИО</th><th>Отдел</th><th>Должность</th><th>Телефон</th><th>Принят</th>
+            <th class="num">Оклад</th><th>Статус</th><th></th></tr></thead>
+          <tbody>${cache.employees.map((e) => `<tr data-id="${esc(e.id)}">
+            <td><b>${esc(e.name)}</b></td>
+            <td>${esc(e.dept) || '—'}</td>
+            <td>${esc(e.pos) || '—'}</td>
+            <td class="muted nowrap">${esc(e.phone) || '—'}</td>
+            <td class="muted nowrap">${esc(e.hire) || '—'}</td>
+            <td class="num">${money(e.salary)}</td>
+            <td>${badge(EMP_STATUS[e.status] ? EMP_STATUS[e.status].t : e.status,
+                       EMP_STATUS[e.status] ? EMP_STATUS[e.status].c : 'var(--tx-3)')}</td>
+            <td class="nowrap" style="text-align:right">
+              ${me.role === 'admin' ? `<button class="icon-btn del" data-emp-del="${esc(e.id)}" title="Удалить">×</button>` : ''}
+            </td></tr>`).join('') || '<tr><td colspan="8" class="empty">Сотрудников нет</td></tr>'}</tbody>
+        </table></div>
+        <p class="sumline">Всего: ${cache.employees.length}. Фонд окладов:
+          ${cache.employees.filter((e) => e.status !== 'fired')
+            .reduce((s, e) => s + (Number(e.salary) || 0), 0).toLocaleString('ru-RU')} ₽</p>`;
+
+      $('#emp-form').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const form = ev.currentTarget;
+        const body = {};
+        new FormData(form).forEach((v, k) => { if (v !== '') body[k] = v; });
+        await api('/employees', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+        form.reset();
+        const r = await api('/employees').catch(() => ({ items: [] }));
+        cache.employees = r.items || [];
+        draw();
+      });
+      $('#emp-cancel').addEventListener('click', () => { $('#emp-form').hidden = true; });
+      $$('[data-emp-del]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          if (!confirm('Удалить сотрудника из кадрового учёта?')) return;
+          await api('/employees/' + b.dataset.empDel, { method: 'DELETE' }).catch(() => {});
+          const r = await api('/employees').catch(() => ({ items: [] }));
+          cache.employees = r.items || [];
+          draw();
+        });
+      });
+    };
+
+    draw();
+    $('#emp-add').addEventListener('click', () => {
+      const f = $('#emp-form');
+      f.hidden = !f.hidden;
+      if (!f.hidden) $('[name=name]', f).focus();
+    });
+  }
+
+  // ─────────── ВЫПЛАТЫ ───────────
+  async function viewPayments() {
+    const [pays, emps] = await Promise.all([
+      api('/payments').catch(() => ({ items: [] })),
+      api('/employees').catch(() => ({ items: [] })),
+    ]);
+    const E = emps.items || [];
+    const P = pays.items || [];
+
+    $('#content').innerHTML = `
+      <form class="formbox" id="pay-form">
+        <select name="emp_id" required>
+          <option value="">Сотрудник</option>
+          ${E.map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`).join('')}
+        </select>
+        <select name="type">
+          ${Object.keys(PAY_TYPES).map((k) => `<option value="${k}">${PAY_TYPES[k]}</option>`).join('')}
+        </select>
+        <input name="date" type="date" value="${today()}" />
+        <input name="sum" type="number" min="1" step="100" placeholder="Сумма, ₽" required />
+        <input name="comment" placeholder="Комментарий" />
+        <div class="f-actions"><button class="btn" type="submit">Добавить выплату</button></div>
+      </form>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Дата</th><th>Сотрудник</th><th>Тип</th><th class="num">Сумма</th><th>Комментарий</th><th></th></tr></thead>
+        <tbody>${P.map((p) => `<tr>
+          <td class="nowrap muted">${esc(p.date)}</td>
+          <td><b>${esc(p.emp_name) || '—'}</b></td>
+          <td>${esc(PAY_TYPES[p.type] || p.type)}</td>
+          <td class="num">${money(p.sum)}</td>
+          <td class="muted">${esc(p.comment) || '—'}</td>
+          <td style="text-align:right"><button class="icon-btn del" data-pay-del="${esc(p.id)}" title="Удалить">×</button></td>
+        </tr>`).join('') || '<tr><td colspan="6" class="empty">Выплат нет</td></tr>'}</tbody>
+      </table></div>
+      <p class="sumline">Выплачено всего: ${P.reduce((s, p) => s + (Number(p.sum) || 0), 0).toLocaleString('ru-RU')} ₽</p>`;
+
+    $('#pay-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      new FormData(e.currentTarget).forEach((v, k) => { if (v !== '') body[k] = v; });
+      await api('/payments', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+      viewPayments();
+    });
+    $$('[data-pay-del]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (!confirm('Удалить выплату?')) return;
+        await api('/payments/' + b.dataset.payDel, { method: 'DELETE' }).catch(() => {});
+        viewPayments();
       });
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  HH
-  // ─────────────────────────────────────────────────────────────────────────────
-  async function loadHH() {
-    const st = await api<any>('/hh/status').catch(() => null);
-    const el = $<HTMLElement>('#hh-status');
-    if (!st?.ok) { el.textContent = 'Статус недоступен'; return; }
-    el.textContent = st.configured
-      ? (st.connected ? `Подключено${st.expires_at ? ', токен до ' + fmt(st.expires_at) : ''}` : 'Ключи есть, авторизация не пройдена')
-      : 'Ключи приложения не заданы — заполните HH_CLIENT_ID и HH_CLIENT_SECRET в .env';
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ТЕКСТЫ И МЕДИА
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Тексты правятся прямо в списке, без отдельного экрана: ключей немного, а прыгать
-  // туда-сюда по страницам ради одной строки — ровно то, из-за чего кабинет казался неудобным
-  async function loadTexts() {
-    const { items } = await api<any>('/texts').catch(() => ({ items: [] }));
-    const box = $<HTMLElement>('#texts-list');
-    if (!items.length) { box.textContent = 'Текстов пока нет'; return; }
-    box.innerHTML = items.map((t: any) => `
-      <div class="cab__row cab__row--text">
-        <div class="cab__text-head">
+  // ─────────── ТЕКСТЫ ───────────
+  async function viewTexts() {
+    const res = await api('/texts').catch(() => ({ items: [] }));
+    const items = res.items || [];
+    $('#content').innerHTML = `<p class="hint">Черновик не попадает на сайт, пока не нажмёте «Опубликовать».</p>
+      ${items.map((t) => `<div class="formbox" style="grid-template-columns:1fr" data-key="${esc(t.key)}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
           <b>${esc(t.key)}</b>
-          <small>${t.status === 'published' ? 'опубликовано' : 'черновик'} · ${esc(t.updated_by ?? '')} · ${fmt(t.updated_at)}</small>
+          <span class="hint" style="margin:0">${t.status === 'published' ? 'опубликовано' : 'черновик'}
+            · ${esc(t.updated_by || '')} · ${esc(fmtDate(t.updated_at))}</span>
         </div>
-        <textarea class="cab__comment" data-val="${esc(t.key)}" rows="3">${esc(t.value)}</textarea>
-        <div class="cab__text-actions">
-          <button class="cab__btn" data-save="${esc(t.key)}" type="button">Сохранить черновик</button>
-          <button class="cab__btn cab__btn--ghost" data-pub="${esc(t.key)}" type="button">Опубликовать</button>
+        <textarea rows="3" data-val>${esc(t.value)}</textarea>
+        <div class="f-actions">
+          <button class="btn" data-save type="button">Сохранить черновик</button>
+          <button class="btn btn--ghost" data-pub type="button">Опубликовать</button>
         </div>
-      </div>`).join('');
+      </div>`).join('') || '<p class="hint">Текстов пока нет</p>'}`;
 
-    box.querySelectorAll<HTMLButtonElement>('[data-save]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const key = btn.dataset.save!;
-        const val = box.querySelector<HTMLTextAreaElement>(`[data-val="${CSS.escape(key)}"]`)!.value;
-        await api(`/texts/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ value: val }) }).catch(() => {});
-        btn.textContent = 'Сохранено';
-        // Возвращаем подпись обратно: иначе через минуту вся колонка будет в «Сохранено»
-        setTimeout(() => (btn.textContent = 'Сохранить черновик'), 1500);
+    $$('[data-key]').forEach((box) => {
+      const key = box.dataset.key;
+      $('[data-save]', box).addEventListener('click', async () => {
+        const val = $('[data-val]', box).value;
+        await api('/texts/' + encodeURIComponent(key), { method: 'PUT', body: JSON.stringify({ value: val }) })
+          .catch(() => {});
+        $('[data-save]', box).textContent = 'Сохранено';
+        setTimeout(() => { $('[data-save]', box).textContent = 'Сохранить черновик'; }, 1500);
       });
-    });
-
-    box.querySelectorAll<HTMLButtonElement>('[data-pub]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        await api(`/texts/${encodeURIComponent(btn.dataset.pub!)}/publish`, { method: 'POST' }).catch(() => {});
-        loadTexts();
+      $('[data-pub]', box).addEventListener('click', async () => {
+        await api('/texts/' + encodeURIComponent(key) + '/publish', { method: 'POST' }).catch(() => {});
+        viewTexts();
       });
     });
   }
 
-  async function loadMedia() {
-    const { items } = await api<any>('/media').catch(() => ({ items: [] }));
-    const box = $<HTMLElement>('#media-list');
-    if (!items.length) { box.textContent = 'Файлов нет'; return; }
-    box.innerHTML = items.map((m: any) => `
-      <figure>
-        <img src="/media/${esc(m.file)}" alt="${esc(m.alt ?? '')}" loading="lazy" />
+  // ─────────── МЕДИА ───────────
+  async function viewMedia() {
+    const res = await api('/media').catch(() => ({ items: [] }));
+    const items = res.items || [];
+    $('#content').innerHTML = `
+      <form class="formbox" id="media-form">
+        <input type="file" name="file" accept="image/*" required />
+        <input name="alt" placeholder="Подпись (alt) — обязательна для SEO" />
+        <div class="f-actions"><button class="btn" type="submit">Загрузить</button></div>
+      </form>
+      <div class="media-grid">${items.map((m) => `<figure>
+        <img src="/media/${esc(m.file)}" alt="${esc(m.alt || '')}" loading="lazy" />
         <figcaption>${esc(m.alt) || esc(m.file)}</figcaption>
-      </figure>`).join('');
+      </figure>`).join('') || '<p class="hint">Файлов нет</p>'}</div>`;
+
+    $('#media-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const fd = new FormData(form);
+      try {
+        const res2 = await fetch('/api/admin/media', { method: 'POST', body: fd, credentials: 'same-origin' });
+        if (!res2.ok) throw new Error('upload failed');
+        form.reset();
+        viewMedia();
+      } catch (err) {
+        toast('Не загрузилось. Проверьте формат и размер файла');
+      }
+    });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ОБРАБОТЧИКИ
-  // ─────────────────────────────────────────────────────────────────────────────
-  $<HTMLFormElement>('#login').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget as HTMLFormElement);
-    const err = $<HTMLElement>('#login-err');
-    err.textContent = '';
-    try {
-      const res = await api<any>('/login', {
-        method: 'POST', body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
-      }, { auth401: false });
-      // 429 значит «упёрся в лимит попыток» (5 в минуту на IP), это НЕ неверный пароль!!
-      if (!res.ok) {
-        err.textContent = res.error === 'too_many_requests'
-          ? 'Слишком много попыток входа. Подождите минуту и попробуйте снова'
-          : 'Неверная почта или пароль';
+  // ─────────── СОЦСЕТИ ───────────
+  async function viewSocial() {
+    const res = await api('/social').catch(() => ({ items: [] }));
+    cache.social = res.items || [];
+
+    $('#content').innerHTML = `
+      <form class="formbox" id="soc-form">
+        <input name="name" placeholder="Название группы" required />
+        <select name="net">
+          <option>VK</option><option>Telegram</option><option>YouTube</option><option>Дзен</option>
+        </select>
+        <input name="link" placeholder="Ссылка" />
+        <input name="members" type="number" min="0" placeholder="Подписчиков" />
+        <input name="posts" type="number" min="0" placeholder="Публикаций" />
+        <input name="engagement" type="number" min="0" step="0.1" placeholder="Вовлечённость, %" />
+        <select name="status">
+          <option value="active">Ведётся</option><option value="paused">Пауза</option>
+          <option value="closed">Закрыта</option>
+        </select>
+        <div class="f-actions"><button class="btn" type="submit">Добавить группу</button></div>
+      </form>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Группа</th><th>Сеть</th><th class="num">Подписчиков</th><th class="num">Публикаций</th>
+          <th class="num">Вовлечённость</th><th>Статус</th><th></th></tr></thead>
+        <tbody>${cache.social.map((g) => `<tr data-id="${esc(g.id)}">
+          <td><b>${esc(g.name)}</b>${g.link ? `<div class="muted">${esc(g.link)}</div>` : ''}</td>
+          <td>${esc(g.net)}</td>
+          <td class="num"><input class="cell num" data-field="members" type="number" value="${g.members}" /></td>
+          <td class="num"><input class="cell num" data-field="posts" type="number" value="${g.posts}" /></td>
+          <td class="num"><input class="cell num" data-field="engagement" type="number" step="0.1" value="${g.engagement}" /></td>
+          <td>${badge(SOCIAL_STATUS[g.status] ? SOCIAL_STATUS[g.status].t : g.status,
+                     SOCIAL_STATUS[g.status] ? SOCIAL_STATUS[g.status].c : 'var(--tx-3)')}</td>
+          <td style="text-align:right"><button class="icon-btn del" data-soc-del="${esc(g.id)}" title="Удалить">×</button></td>
+        </tr>`).join('') || '<tr><td colspan="7" class="empty">Групп нет</td></tr>'}</tbody>
+      </table></div>`;
+
+    $('#soc-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      new FormData(e.currentTarget).forEach((v, k) => { if (v !== '') body[k] = v; });
+      await api('/social', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
+      viewSocial();
+    });
+    $$('[data-field]').forEach((el) => {
+      el.addEventListener('change', async () => {
+        const tr = el.closest('tr');
+        const body = {};
+        body[el.dataset.field] = Number(el.value) || 0;
+        await api('/social/' + tr.dataset.id, { method: 'PATCH', body: JSON.stringify(body) }).catch(() => {});
+        el.classList.add('saved');
+        setTimeout(() => el.classList.remove('saved'), 900);
+      });
+    });
+    $$('[data-soc-del]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (!confirm('Удалить группу?')) return;
+        await api('/social/' + b.dataset.socDel, { method: 'DELETE' }).catch(() => {});
+        viewSocial();
+      });
+    });
+  }
+
+  // ─────────── СТАТИСТИКА ───────────
+  async function viewStats() {
+    $('#content').innerHTML = `
+      <p class="hint">Данные из Яндекс.Метрики. Обновляются кнопкой, не на каждый показ — щадим лимиты API.</p>
+      <button class="btn" id="stats-btn" type="button">Обновить данные</button>
+      <pre class="pre" id="stats-out" style="margin-top:16px"></pre>`;
+    $('#stats-btn').addEventListener('click', async () => {
+      const out = $('#stats-out');
+      out.textContent = 'Запрашиваю Метрику…';
+      const r = await api('/stats/refresh', { method: 'POST' }).catch(() => null);
+      out.textContent = JSON.stringify(r, null, 2);
+    });
+  }
+
+  // ─────────── ПОЛЬЗОВАТЕЛИ ───────────
+  async function viewUsers() {
+    const res = await api('/users').catch(() => ({ items: [] }));
+    cache.users = res.items || [];
+    $('#top-actions').innerHTML = '<button class="btn" id="user-add" type="button">Добавить пользователя</button>';
+
+    $('#content').innerHTML = `
+      <form class="formbox" id="user-form" hidden>
+        <input name="email" type="email" placeholder="Почта" required />
+        <input name="name" placeholder="Имя" />
+        <input name="password" type="password" placeholder="Пароль, минимум 12 символов" required minlength="12" />
+        <select name="role">
+          ${Object.keys(ROLES_RU).map((k) => `<option value="${k}">${ROLES_RU[k]}</option>`).join('')}
+        </select>
+        <div class="f-actions">
+          <button class="btn" type="submit">Создать</button>
+          <button class="btn btn--ghost" type="button" id="user-cancel">Отмена</button>
+        </div>
+      </form>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Имя</th><th>Почта</th><th>Роль</th><th>Активен</th><th>Последний вход</th><th></th></tr></thead>
+        <tbody>${cache.users.map((u) => `<tr data-id="${esc(u.id)}">
+          <td><b>${esc(u.name) || '—'}</b></td>
+          <td class="muted">${esc(u.email)}</td>
+          <td><select class="cell" data-u-role>
+            ${Object.keys(ROLES_RU).map((k) =>
+              `<option value="${k}"${u.role === k ? ' selected' : ''}>${ROLES_RU[k]}</option>`).join('')}
+          </select></td>
+          <td><input type="checkbox" data-u-active ${u.active ? 'checked' : ''} /></td>
+          <td class="muted nowrap">${esc(fmtDate(u.last_login))}</td>
+          <td style="text-align:right">
+            <button class="btn btn--ghost btn--sm" data-u-pass="${esc(u.id)}" type="button">Сменить пароль</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="6" class="empty">Пользователей нет</td></tr>'}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:12px">Саморегистрации нет: пользователей заводит только администратор.
+        При смене пароля все сессии этого человека закрываются.</p>`;
+
+    $('#user-add').addEventListener('click', () => {
+      const f = $('#user-form');
+      f.hidden = !f.hidden;
+      if (!f.hidden) $('[name=email]', f).focus();
+    });
+    $('#user-cancel').addEventListener('click', () => { $('#user-form').hidden = true; });
+    $('#user-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      new FormData(e.currentTarget).forEach((v, k) => { if (v !== '') body[k] = v; });
+      const r = await api('/users', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+      if (!r || !r.ok) {
+        const map = {
+          email_taken: 'Такая почта уже занята', password_too_short: 'Пароль короче 12 символов',
+          bad_email: 'Проверьте адрес почты',
+        };
+        toast(map[r && r.error] || 'Не удалось создать пользователя');
         return;
       }
-      await init();
-      // Пускаем только если сессия реально встала. На http с флагом Secure браузер выбрасывает cookie,
-      // и без этой проверки форма просто мигала бы молча — как будто кнопка не работает
-      if (!me) { err.textContent = 'Вход прошёл, но браузер не сохранил сессию. Адрес должен быть http://localhost:4321'; return; }
-    } catch {
-      err.textContent = 'Сервер не отвечает';
-    }
-  });
-
-  $<HTMLElement>('#logout').addEventListener('click', async () => {
-    await api('/logout', { method: 'POST' }).catch(() => {});
-    me = null; renderAuth();
-  });
-
-  $$('.cab__tab').forEach((tab) => {
-    tab.addEventListener('click', () => openPanel(tab.dataset.panel!));
-  });
-
-  // Поиск с задержкой: без неё каждый символ — запрос к серверу
-  let timer: number | undefined;
-  ['#f-q', '#f-status', '#f-source'].forEach((sel) => {
-    $(sel).addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(loadLeads, sel === '#f-q' ? 350 : 0) as unknown as number;
+      viewUsers();
     });
-  });
-  // Сортировка по клику на заголовок. Третий клик возвращает исходный порядок по дате —
-  // иначе человек не понимает, как вернуться «как было»
-  $$('#leads-table th[data-sort]').forEach((th) => {
-    th.addEventListener('click', () => {
-      const key = th.dataset.sort!;
-      if (sortKey === key) sortDir = sortDir === -1 ? 1 : -1;
-      else { sortKey = key; sortDir = key === 'created_at' || key === 'amount' ? -1 : 1; }
-      $$('#leads-table th[data-sort]').forEach((h) => h.classList.remove('is-sorted', 'is-sorted-asc'));
-      th.classList.add(sortDir === -1 ? 'is-sorted' : 'is-sorted-asc');
-      drawLeads();
+    $$('[data-u-role]').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const r = await api('/users/' + sel.closest('tr').dataset.id, {
+          method: 'PATCH', body: JSON.stringify({ role: sel.value }),
+        }).catch(() => null);
+        if (!r || !r.ok) {
+          toast(r && r.error === 'last_admin' ? 'Это последний администратор — понизить нельзя'
+            : r && r.error === 'cannot_demote_self' ? 'Нельзя снять роль с самого себя' : 'Не удалось изменить роль');
+          viewUsers();
+        }
+      });
     });
-  });
+    $$('[data-u-active]').forEach((cb) => {
+      cb.addEventListener('change', async () => {
+        const r = await api('/users/' + cb.closest('tr').dataset.id, {
+          method: 'PATCH', body: JSON.stringify({ active: cb.checked ? 1 : 0 }),
+        }).catch(() => null);
+        if (!r || !r.ok) { toast('Не удалось изменить доступ'); viewUsers(); }
+      });
+    });
+    $$('[data-u-pass]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const pass = prompt('Новый пароль (минимум 12 символов):');
+        if (!pass) return;
+        const r = await api('/users/' + b.dataset.uPass, {
+          method: 'PATCH', body: JSON.stringify({ password: pass }),
+        }).catch(() => null);
+        toast(r && r.ok ? 'Пароль изменён, сессии закрыты' : 'Не удалось: ' + ((r && r.error) || 'нет ответа'));
+      });
+    });
+  }
 
-  // Форма ручного добавления
-  $<HTMLElement>('#lead-add').addEventListener('click', () => {
-    const form = $<HTMLFormElement>('#newlead');
-    form.hidden = !form.hidden;
-    if (!form.hidden) form.querySelector<HTMLInputElement>('[name=name]')!.focus();
-  });
-  $<HTMLElement>('#newlead-cancel').addEventListener('click', () => {
-    $<HTMLFormElement>('#newlead').hidden = true;
-  });
-  $<HTMLFormElement>('#newlead').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.currentTarget as HTMLFormElement;
-    const fd = new FormData(form);
-    const body = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ''));
-    await api('/leads', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
-    form.reset();
-    form.hidden = true;
-    loadLeads();
-    refreshCounters();
-  });
+  // ─────────── ЖУРНАЛ ───────────
+  async function viewAudit() {
+    const res = await api('/audit?limit=200').catch(() => ({ items: [] }));
+    const items = res.items || [];
+    $('#content').innerHTML = `<p class="hint">Кто и что менял. Пишутся только значимые события:
+      правка заявок, кадров, выплат, пользователей и медиа.</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr></thead>
+        <tbody>${items.map((a) => `<tr>
+          <td class="nowrap muted">${esc(fmtDate(a.at))}</td>
+          <td>${esc(a.actor) || '—'}</td>
+          <td><code style="font-size:12px">${esc(a.action)}</code></td>
+          <td class="muted">${esc(a.target) ? esc(String(a.target).slice(0, 8)) + '…' : '—'}</td>
+          <td class="muted">${esc(a.details) || '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">Журнал пуст</td></tr>'}</tbody>
+      </table></div>`;
+  }
 
-  $<HTMLElement>('#f-vacancy').addEventListener('change', loadApps);
+  // ─────────── РЕЕСТР ЭКРАНОВ ───────────
+  const VIEWS = {
+    overview: viewOverview,
+    leads: viewLeads,
+    apps: viewApps,
+    vacancies: viewVacancies,
+    employees: viewEmployees,
+    payments: viewPayments,
+    texts: viewTexts,
+    media: viewMedia,
+    social: viewSocial,
+    stats: viewStats,
+    users: viewUsers,
+    audit: viewAudit,
+  };
 
-  $<HTMLFormElement>('#media-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.currentTarget as HTMLFormElement;
-    const err = $<HTMLElement>('#media-err');
-    err.textContent = '';
-    try {
-      await api('/media', { method: 'POST', body: new FormData(form) });
-      form.reset();
-      loadMedia();
-    } catch {
-      err.textContent = 'Не загрузилось. Проверьте формат и размер файла';
-    }
-  });
+  // ─────────── ПЛАШКА ───────────
+  let toastTimer;
+  function toast(msg) {
+    const el = $('#toast');
+    el.textContent = msg;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  }
+  $('#toast').addEventListener('click', () => { $('#toast').hidden = true; });
 
-  $<HTMLElement>('#hh-sync').addEventListener('click', async () => {
-    const el = $<HTMLElement>('#hh-status');
-    el.textContent = 'Синхронизирую…';
-    const r = await api<any>('/hh/sync', { method: 'POST' }).catch(() => null);
-    el.textContent = r?.ok ? 'Готово' : 'Не удалось: ' + (r?.error ?? 'нет ответа');
-  });
-
-  $<HTMLElement>('#stats-refresh').addEventListener('click', async () => {
-    const out = $<HTMLElement>('#stats-out');
-    out.textContent = 'Запрашиваю Метрику…';
-    const r = await api<any>('/stats/refresh', { method: 'POST' }).catch(() => null);
-    out.textContent = JSON.stringify(r, null, 2);
-  });
-
-  $<HTMLElement>('#toast').addEventListener('click', () => {
-    // Клик по плашке — сразу к заявкам, а не просто закрыть
-    $<HTMLElement>('#toast').hidden = true;
-    openPanel('leads');
-  });
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  СТАРТ
-  // ─────────────────────────────────────────────────────────────────────────────
-  async function init() {
-    const res = await api<any>('/me').catch(() => ({ ok: false }));
+  // ─────────── СТАРТ ───────────
+  async function boot() {
+    const res = await api('/me').catch(() => ({ ok: false }));
     me = res.ok ? res.user : null;
     renderAuth();
-    if (me) {
-      refreshCounters();
-      // Опрос раз в минуту. Не чаще: заявки приходят не потоком, а лишние запросы
-      // на локальной машине просто мешают читать логи
-      setInterval(refreshCounters, 60_000);
-    }
   }
-  init();
-</script>
+
+  initTheme();
+  boot();
+})();
+
+  </script>
+</body>
+</html>
