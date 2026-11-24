@@ -104,6 +104,64 @@ db.exec(`
     value      TEXT NOT NULL,
     fetched_at TEXT NOT NULL
   );
+
+  -- Сотрудники. Не путать с users: users — это те, кто входит в кабинет,
+  -- сотрудники — это кадровый учёт, у них может не быть доступа вообще.
+  -- Держим раздельно намеренно: увольнение сотрудника не должно закрывать вход в CRM
+  CREATE TABLE IF NOT EXISTS employees (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    dept       TEXT,              -- отдел: Продажи, Производство, HR, Маркетинг
+    pos        TEXT,              -- должность
+    hire       TEXT,              -- дата приёма, ISO
+    status     TEXT NOT NULL DEFAULT 'active', -- active | prob | fired
+    phone      TEXT,
+    email      TEXT,
+    salary     INTEGER,           -- оклад в рублях
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+  );
+
+  -- Выплаты. Отдельная таблица, а не поле в сотруднике: история нужна за годы,
+  -- и по ней потом считается фонд оплаты труда
+  CREATE TABLE IF NOT EXISTS payments (
+    id         TEXT PRIMARY KEY,
+    emp_id     TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    type       TEXT NOT NULL DEFAULT 'salary', -- salary | bonus | advance | vacation
+    sum        INTEGER NOT NULL,
+    comment    TEXT,
+    created_at TEXT NOT NULL
+  );
+  -- Индекс по сотруднику: без него выплаты по одному человеку ищутся полным перебором
+  CREATE INDEX IF NOT EXISTS idx_payments_emp ON payments(emp_id);
+
+  -- Группы соцсетей. Числа вводим руками: тянуть из API ВК и Телеграма —
+  -- это отдельные токены и отдельное согласование, а сводка нужна сейчас
+  CREATE TABLE IF NOT EXISTS social_groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    net        TEXT NOT NULL,     -- VK | Telegram | YouTube | Дзен
+    link       TEXT,
+    members    INTEGER DEFAULT 0,
+    posts      INTEGER DEFAULT 0,
+    engagement REAL DEFAULT 0,    -- процент вовлечённости
+    status     TEXT NOT NULL DEFAULT 'active', -- active | paused | closed
+    manager    TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  -- Журнал действий. Нужен, чтобы понять, кто сдвинул заявку и когда.
+  -- Пишем только значимые события: вход, правка заявки, удаление, смена прав
+  CREATE TABLE IF NOT EXISTS audit (
+    id      TEXT PRIMARY KEY,
+    at      TEXT NOT NULL,
+    actor   TEXT,                 -- почта того, кто сделал
+    action  TEXT NOT NULL,        -- lead.update | lead.delete | user.create | media.upload ...
+    target  TEXT,                 -- id объекта
+    details TEXT                  -- что именно поменяли, коротко
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_at ON audit(at);
 `);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,6 +185,17 @@ for (const [col, type] of leadColumns) {
 }
 
 const now = () => new Date().toISOString();
+
+// Журнал действий. Ошибку записи НЕ пробрасываем: если лог упал, это не повод
+// отменять удачную правку заявки. Но и молча глотать не будем — пусть будет в консоли
+function logAction(actor, action, target, details) {
+  try {
+    db.prepare('INSERT INTO audit (id, at, actor, action, target, details) VALUES (?,?,?,?,?,?)')
+      .run(randomUUID(), now(), actor ?? null, action, target ?? null, details ? String(details).slice(0, 500) : null);
+  } catch (e) {
+    console.error('[audit]', action, e?.message ?? e);
+  }
+}
 
 // ---------- Пароли ----------
 // scrypt, а не sha256: намеренно медленный, перебор по словарю становится дорогим.
@@ -412,6 +481,253 @@ export const adminRoutes = {
   },
 
   // ---------- HH (HR) ----------
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  СОТРУДНИКИ. Кадровый учёт, отдельно от users: у сотрудника может не быть
+  //  доступа в кабинет, а у пользователя кабинета может не быть в штате (подрядчик)
+  // ─────────────────────────────────────────────────────────────────────────────
+  async 'GET /api/admin/employees'(req, res, url) {
+    if (!requireRole(req, res, ['hr'])) return;
+    const q = url.searchParams.get('q');
+    const dept = url.searchParams.get('dept');
+    const where = [];
+    const args = [];
+    if (q) { where.push('(name LIKE ? OR pos LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
+    if (dept) { where.push('dept = ?'); args.push(dept); }
+    const sql = `SELECT * FROM employees ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                 ORDER BY name COLLATE NOCASE`;
+    return json(res, 200, { ok: true, items: db.prepare(sql).all(...args) });
+  },
+
+  async 'POST /api/admin/employees'(req, res) {
+    const user = requireRole(req, res, ['hr']);
+    if (!user) return;
+    const b = await readJson(req);
+    if (!b.name) return json(res, 400, { ok: false, error: 'name_required' });
+    const id = randomUUID();
+    db.prepare(`INSERT INTO employees (id, name, dept, pos, hire, status, phone, email, salary, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, String(b.name).slice(0, 200), b.dept ?? null, b.pos ?? null, b.hire ?? null,
+        ['active', 'prob', 'fired'].includes(b.status) ? b.status : 'active',
+        b.phone ?? null, b.email ?? null,
+        Number.isFinite(Number(b.salary)) && Number(b.salary) >= 0 ? Math.round(Number(b.salary)) : null,
+        now());
+    logAction(user.email, 'employee.create', id, b.name);
+    return json(res, 201, { ok: true, id });
+  },
+
+  async 'PATCH /api/admin/employees/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['hr']);
+    if (!user) return;
+    const b = await readJson(req);
+    const fields = ['name', 'dept', 'pos', 'hire', 'status', 'phone', 'email', 'salary'];
+    if (b.status && !['active', 'prob', 'fired'].includes(b.status)) {
+      return json(res, 400, { ok: false, error: 'bad_status' });
+    }
+    // Собираем SET только из присланных полей: так апдейт не затирает остальное NULL-ами
+    const sets = [];
+    const args = [];
+    for (const f of fields) {
+      if (b[f] === undefined) continue;
+      sets.push(`${f} = ?`);
+      args.push(f === 'salary' && b[f] !== '' ? Math.round(Number(b[f]) || 0) : b[f]);
+    }
+    if (!sets.length) return json(res, 400, { ok: false, error: 'nothing_to_update' });
+    sets.push('updated_at = ?');
+    args.push(now(), params.id);
+    db.prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    logAction(user.email, 'employee.update', params.id, Object.keys(b).join(','));
+    return json(res, 200, { ok: true });
+  },
+
+  // Удаление сотрудника — только админ. Кадровые данные нельзя терять по клику менеджера
+  async 'DELETE /api/admin/employees/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['admin']);
+    if (!user) return;
+    const hit = db.prepare('DELETE FROM employees WHERE id = ?').run(params.id);
+    if (!hit.changes) return json(res, 404, { ok: false, error: 'not_found' });
+    logAction(user.email, 'employee.delete', params.id, null);
+    return json(res, 200, { ok: true });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  ВЫПЛАТЫ
+  // ─────────────────────────────────────────────────────────────────────────────
+  async 'GET /api/admin/payments'(req, res, url) {
+    if (!requireRole(req, res, ['hr'])) return;
+    const emp = url.searchParams.get('emp');
+    const where = emp ? 'WHERE p.emp_id = ?' : '';
+    const args = emp ? [emp] : [];
+    const sql = `SELECT p.*, e.name AS emp_name FROM payments p
+                 LEFT JOIN employees e ON e.id = p.emp_id
+                 ${where} ORDER BY p.date DESC LIMIT 500`;
+    return json(res, 200, { ok: true, items: db.prepare(sql).all(...args) });
+  },
+
+  async 'POST /api/admin/payments'(req, res) {
+    const user = requireRole(req, res, ['hr']);
+    if (!user) return;
+    const b = await readJson(req);
+    const sum = Number(b.sum);
+    if (!b.emp_id || !Number.isFinite(sum) || sum <= 0) {
+      return json(res, 400, { ok: false, error: 'bad_payment' });
+    }
+    const id = randomUUID();
+    db.prepare('INSERT INTO payments (id, emp_id, date, type, sum, comment, created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(id, b.emp_id, b.date || now().slice(0, 10),
+        ['salary', 'bonus', 'advance', 'vacation'].includes(b.type) ? b.type : 'salary',
+        Math.round(sum), b.comment ?? null, now());
+    logAction(user.email, 'payment.create', id, `${sum} ₽`);
+    return json(res, 201, { ok: true, id });
+  },
+
+  async 'DELETE /api/admin/payments/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['admin', 'hr']);
+    if (!user) return;
+    const hit = db.prepare('DELETE FROM payments WHERE id = ?').run(params.id);
+    if (!hit.changes) return json(res, 404, { ok: false, error: 'not_found' });
+    logAction(user.email, 'payment.delete', params.id, null);
+    return json(res, 200, { ok: true });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  СОЦСЕТИ. Маркетолог ведёт список групп и цифры руками.
+  // ─────────────────────────────────────────────────────────────────────────────
+  async 'GET /api/admin/social'(req, res) {
+    if (!requireRole(req, res, ['marketing'])) return;
+    return json(res, 200, { ok: true, items: db.prepare('SELECT * FROM social_groups ORDER BY net, name').all() });
+  },
+
+  async 'POST /api/admin/social'(req, res) {
+    const user = requireRole(req, res, ['marketing']);
+    if (!user) return;
+    const b = await readJson(req);
+    if (!b.name || !b.net) return json(res, 400, { ok: false, error: 'name_and_net_required' });
+    const id = randomUUID();
+    db.prepare(`INSERT INTO social_groups (id, name, net, link, members, posts, engagement, status, manager, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, String(b.name).slice(0, 200), String(b.net).slice(0, 40), b.link ?? null,
+        Math.round(Number(b.members) || 0), Math.round(Number(b.posts) || 0),
+        Number(b.engagement) || 0,
+        ['active', 'paused', 'closed'].includes(b.status) ? b.status : 'active',
+        b.manager ?? user.email, now());
+    logAction(user.email, 'social.create', id, b.name);
+    return json(res, 201, { ok: true, id });
+  },
+
+  async 'PATCH /api/admin/social/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['marketing']);
+    if (!user) return;
+    const b = await readJson(req);
+    const fields = ['name', 'net', 'link', 'members', 'posts', 'engagement', 'status', 'manager'];
+    const sets = [];
+    const args = [];
+    for (const f of fields) {
+      if (b[f] === undefined) continue;
+      sets.push(`${f} = ?`);
+      args.push(b[f]);
+    }
+    if (!sets.length) return json(res, 400, { ok: false, error: 'nothing_to_update' });
+    sets.push('updated_at = ?');
+    args.push(now(), params.id);
+    db.prepare(`UPDATE social_groups SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    logAction(user.email, 'social.update', params.id, Object.keys(b).join(','));
+    return json(res, 200, { ok: true });
+  },
+
+  async 'DELETE /api/admin/social/:id'(req, res, url, params) {
+    const user = requireRole(req, res, ['marketing']);
+    if (!user) return;
+    const hit = db.prepare('DELETE FROM social_groups WHERE id = ?').run(params.id);
+    if (!hit.changes) return json(res, 404, { ok: false, error: 'not_found' });
+    logAction(user.email, 'social.delete', params.id, null);
+    return json(res, 200, { ok: true });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  ПОЛЬЗОВАТЕЛИ КАБИНЕТА. Только админ. Саморегистрации нет и не будет:
+  //  в системе с персданными это подарок любому, кто узнал адрес
+  // ─────────────────────────────────────────────────────────────────────────────
+  async 'GET /api/admin/users'(req, res) {
+    if (!requireRole(req, res, ['admin'])) return;
+    // pass_hash наружу не отдаём ни при каких условиях — даже хеш
+    const items = db.prepare('SELECT id, email, name, role, active, created_at, last_login FROM users ORDER BY created_at')
+      .all();
+    return json(res, 200, { ok: true, items });
+  },
+
+  async 'POST /api/admin/users'(req, res) {
+    const admin = requireRole(req, res, ['admin']);
+    if (!admin) return;
+    const b = await readJson(req);
+    const email = String(b.email ?? '').trim().toLowerCase();
+    const role = b.role ?? 'viewer';
+    const ROLES = ['admin', 'hr', 'marketing', 'viewer'];
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(res, 400, { ok: false, error: 'bad_email' });
+    if (!ROLES.includes(role)) return json(res, 400, { ok: false, error: 'bad_role' });
+    // Та же планка, что в seed-user: слабый пароль в админке к персданным — не мелочь
+    if (String(b.password ?? '').length < 12) return json(res, 400, { ok: false, error: 'password_too_short' });
+
+    if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
+      return json(res, 409, { ok: false, error: 'email_taken' });
+    }
+    const id = randomUUID();
+    db.prepare('INSERT INTO users (id, email, name, pass_hash, role, active, created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(id, email, String(b.name ?? '').slice(0, 120) || email.split('@')[0], hashPass(String(b.password)), role, 1, now());
+    logAction(admin.email, 'user.create', id, `${email} · ${role}`);
+    return json(res, 201, { ok: true, id });
+  },
+
+  async 'PATCH /api/admin/users/:id'(req, res, url, params) {
+    const admin = requireRole(req, res, ['admin']);
+    if (!admin) return;
+    const b = await readJson(req);
+    const ROLES = ['admin', 'hr', 'marketing', 'viewer'];
+    if (b.role && !ROLES.includes(b.role)) return json(res, 400, { ok: false, error: 'bad_role' });
+
+    // Защита от самоблокировки: если админ снимет себе роль admin или active,
+    // в системе может не остаться ни одного администратора, и войти будет некому
+    if (params.id === admin.id && (b.role && b.role !== 'admin' || b.active === 0 || b.active === false)) {
+      return json(res, 400, { ok: false, error: 'cannot_demote_self' });
+    }
+    // И последнего админа в принципе не разжалуем
+    if (b.role && b.role !== 'admin') {
+      const admins = db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1").get().n;
+      const target = db.prepare('SELECT role FROM users WHERE id = ?').get(params.id);
+      if (target?.role === 'admin' && admins <= 1) return json(res, 400, { ok: false, error: 'last_admin' });
+    }
+
+    const sets = [];
+    const args = [];
+    if (b.role !== undefined) { sets.push('role = ?'); args.push(b.role); }
+    if (b.active !== undefined) { sets.push('active = ?'); args.push(b.active ? 1 : 0); }
+    if (b.name !== undefined) { sets.push('name = ?'); args.push(String(b.name).slice(0, 120)); }
+    if (b.password) {
+      if (String(b.password).length < 12) return json(res, 400, { ok: false, error: 'password_too_short' });
+      sets.push('pass_hash = ?'); args.push(hashPass(String(b.password)));
+      // Смена пароля убивает живые сессии этого пользователя. Иначе старый пароль
+      // остаётся действующим через чужую открытую вкладку — то есть смена бесполезна
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(params.id);
+    }
+    if (!sets.length) return json(res, 400, { ok: false, error: 'nothing_to_update' });
+    args.push(params.id);
+    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    logAction(admin.email, 'user.update', params.id, Object.keys(b).filter((k) => k !== 'password').join(','));
+    return json(res, 200, { ok: true });
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  ЖУРНАЛ. Виден админу: там почты сотрудников и что они делали
+  // ─────────────────────────────────────────────────────────────────────────────
+  async 'GET /api/admin/audit'(req, res, url) {
+    if (!requireRole(req, res, ['admin'])) return;
+    const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), 500);
+    return json(res, 200, {
+      ok: true,
+      items: db.prepare('SELECT * FROM audit ORDER BY at DESC LIMIT ?').all(limit),
+    });
+  },
 
   // GET /api/admin/hh/status — что с подключением, когда последняя синхронизация
   async 'GET /api/admin/hh/status'(req, res) {
