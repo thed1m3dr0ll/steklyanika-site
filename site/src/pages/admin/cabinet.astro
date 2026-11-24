@@ -7,7 +7,7 @@
 //
 //  1   ДАННЫЕ         импорты
 //  2   РАЗМЕТКА       вход, каркас (сайдбар + топбар), все экраны
-//  3   СТИЛИ          темы (5 штук), каркас, таблицы, канбан, карточки
+//  3   СТИЛИ          темы (6 штук), каркас, таблицы, канбан, карточки
 //  4   СКРИПТ         авторизация, загрузка данных, рендер, действия
 //
 //  Страница самодостаточная: свой <head>, без Base. Причина — у CRM своя оболочка
@@ -29,7 +29,7 @@ export const prerender = true;
   <link rel="icon" href="/favicon.png" />
   <style is:inline>
     /* ═══════════════════════════════════════════════════════════════
-       ТЕМЫ. Пять палитр на CSS-переменных: меняем data-theme на <html>,
+       ТЕМЫ. Шесть палитр на CSS-переменных: меняем data-theme на <html>,
        и весь интерфейс перекрашивается. Ни одного хардкода цвета ниже
        за пределами этого блока — иначе тема перестанет работать
        ═══════════════════════════════════════════════════════════════ */
@@ -71,6 +71,21 @@ export const prerender = true;
       --sb-bg: #FFFFFF; --sb-border: #E4E7EB; --sb-text: #1F2937; --sb-muted: #6B7280;
       --sb-hover: #F3F4F6; --sb-active-bg: #E8F0FE; --sb-active-text: #1A56DB;
       --r-card: 8px; --sh-card: 0 1px 3px rgba(15,23,42,.06);
+    }
+    /* Тема ВК: фирменный синий и светлый фон, как в вебе соцсети.
+       Нужна потому, что маркетолог весь день смотрит на группы — пусть и кабинет будет «свой» */
+    html[data-theme="vk"] {
+      --bg-app: #EDEEF0; --bg-app-gradient: #EDEEF0;
+      --bg-surface: #FFFFFF; --bg-surface-2: #F0F2F5; --bg-surface-3: #E5E8EC;
+      --bg-col: rgba(228,232,238,.75); --bg-topbar: rgba(237,238,240,.85);
+      --tx-1: #000000; --tx-2: #656565; --tx-3: #939393;
+      --bd-1: rgba(0,0,0,.08); --bd-2: rgba(0,0,0,.16);
+      --accent: #0077FF; --accent-soft: rgba(0,119,255,.10);
+      --sb-bg: #FFFFFF; --sb-border: rgba(0,0,0,.08);
+      --sb-text: #000000; --sb-muted: #818C99; --sb-hover: #F0F2F5;
+      --sb-active-bg: #E5EBF1; --sb-active-text: #0077FF;
+      --r-card: 12px; --sh-card: 0 1px 2px rgba(0,0,0,.06);
+      --ok: #4BB34B; --warn: #FFA000; --bad: #E64646; --info: #0077FF;
     }
     html[data-theme="skatinov"], html[data-theme="dark"] {
       --bg-app: #07080D;
@@ -287,6 +302,14 @@ export const prerender = true;
     .media-grid figcaption { font-size: 11.5px; color: var(--tx-3); margin-top: 6px; word-break: break-word; }
     .pre { background: var(--bg-surface); border: 1px solid var(--bd-1); border-radius: var(--r-card);
       padding: 16px; overflow: auto; font-size: 12px; max-height: 400px; font-family: var(--font-mono); }
+    /* Скелетон: полосы с бегущим бликом, пока идут данные */
+    .skeleton { height: 64px; border-radius: var(--r-card); margin-bottom: 12px;
+      background: linear-gradient(90deg, var(--bg-surface-2) 25%, var(--bg-surface-3) 37%, var(--bg-surface-2) 63%);
+      background-size: 400% 100%; animation: sk 1.3s ease-in-out infinite; }
+    .skeleton:nth-child(2) { height: 120px; }
+    .skeleton:nth-child(3) { height: 90px; }
+    @keyframes sk { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+
     .toast { position: fixed; right: 22px; bottom: 22px; background: var(--tx-1); color: var(--bg-surface);
       padding: 13px 17px; border-radius: 11px; font-size: 13.5px; z-index: 600; cursor: pointer;
       box-shadow: 0 10px 30px rgba(0,0,0,.25); }
@@ -479,6 +502,7 @@ export const prerender = true;
   // ─────────── ТЕМЫ ───────────
   const THEMES = [
     { id: 'apple', name: 'Apple', color: '#0071E3' },
+    { id: 'vk', name: 'ВКонтакте', color: '#0077FF' },
     { id: 'bitrix', name: 'Bitrix', color: '#2E8BFF' },
     { id: 'erp', name: 'ERP', color: '#1A56DB' },
     { id: 'skatinov', name: 'Бренд', color: '#7fd1ff' },
@@ -584,7 +608,9 @@ export const prerender = true;
     $$('.sb-item').forEach((b) => b.classList.toggle('on', b.dataset.view === id));
     $('#view-title').textContent = TITLES[id] || id;
     $('#top-actions').innerHTML = '';
-    $('#content').innerHTML = '<p class="hint">Загрузка…</p>';
+    // Скелетон из трёх полос вместо надписи «Загрузка…»: видно, что страница живая,
+    // и не приходится гадать, идёт запрос или всё подвисло
+    $('#content').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
     const fn = VIEWS[id];
     if (fn) fn();
     else $('#content').innerHTML = '<p class="hint">Раздел в разработке</p>';
@@ -606,14 +632,14 @@ export const prerender = true;
 
     $('#content').innerHTML = `
       <div class="kpis">
-        <div class="kpi"><div class="k-label">Новые заявки</div><div class="k-val">${newLeads}</div>
-          <div class="k-sub">ждут первого звонка</div></div>
+        <div class="kpi" style="cursor:pointer" data-goto="leads"><div class="k-label">Новые заявки</div>
+          <div class="k-val">${newLeads}</div><div class="k-sub">ждут первого звонка</div></div>
         <div class="kpi"><div class="k-label">В работе</div><div class="k-val">${inWork}</div>
           <div class="k-sub">взяты менеджером</div></div>
         <div class="kpi"><div class="k-label">Сумма заявок</div><div class="k-val">${total.toLocaleString('ru-RU')} ₽</div>
           <div class="k-sub">по всем, включая архив</div></div>
-        <div class="kpi"><div class="k-label">Новые отклики</div><div class="k-val">${newApps}</div>
-          <div class="k-sub">на вакансии</div></div>
+        <div class="kpi" style="cursor:pointer" data-goto="apps"><div class="k-label">Новые отклики</div>
+          <div class="k-val">${newApps}</div><div class="k-sub">на вакансии</div></div>
       </div>
       <h2 style="font-size:16px;margin:0 0 12px">Последние заявки</h2>
       <div class="tbl-wrap"><table class="tbl">
@@ -627,12 +653,29 @@ export const prerender = true;
         </tr>`).join('') || '<tr><td colspan="5" class="empty">Заявок нет</td></tr>'}</tbody>
       </table></div>
 
+      ${(() => {
+        // «Требует внимания»: заявки старше двух суток в статусе new. Это то, что реально
+        // теряется — клиент написал, а менеджер не позвонил. Считаем на клиенте, сервер тут не нужен
+        const stale = L.filter((l) => l.status === 'new' &&
+          Date.now() - new Date(l.created_at).getTime() > 2 * 86400000);
+        if (!stale.length) return '';
+        return `<div class="warn" style="margin-bottom:20px">
+          <b>Требуют внимания: ${stale.length}</b> — заявки висят в статусе «Новая» больше двух суток.
+          ${stale.slice(0, 3).map((l) => esc(l.name) || 'без имени').join(', ')}${stale.length > 3 ? ' и другие' : ''}
+        </div>`;
+      })()}
+
       <h2 style="font-size:16px;margin:24px 0 12px">Группы соцсетей</h2>
       <div class="kpis">${(social.items || []).map((g) => `
         <div class="kpi"><div class="k-label">${esc(g.net)}</div>
           <div class="k-val">${Number(g.members).toLocaleString('ru-RU')}</div>
           <div class="k-sub">${esc(g.name)} · вовлечённость ${g.engagement}%</div></div>`).join('')
         || '<p class="hint">Групп пока нет</p>'}</div>`;
+
+    // Клик по плитке ведёт в раздел: меньше движений мышью
+    $$('[data-goto]').forEach((el) => {
+      el.addEventListener('click', () => switchView(el.dataset.goto));
+    });
   }
 
   // ─────────── ЗАЯВКИ: 4 РЕЖИМА ───────────
@@ -901,10 +944,20 @@ export const prerender = true;
   // ждать сеть на каждом броске — это задержка, из-за которой кажется, что не работает
   function wireKanban(root, onDrop) {
     let dragId = null;
+    let wasDragging = false;   // после переноса клик не должен открывать карточку
     $$('.kcard', root).forEach((card) => {
-      card.addEventListener('dragstart', () => { dragId = card.dataset.id; card.classList.add('dragging'); });
-      card.addEventListener('dragend', () => card.classList.remove('dragging'));
+      card.addEventListener('dragstart', () => {
+        dragId = card.dataset.id;
+        wasDragging = true;
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        // Сбрасываем флаг не сразу, а после того как браузер отработает click
+        setTimeout(() => { wasDragging = false; }, 60);
+      });
       card.addEventListener('click', () => {
+        if (wasDragging) return;
         const item = (cache.leads || []).find((l) => l.id === card.dataset.id);
         if (item) openLead(item);
       });
@@ -978,6 +1031,15 @@ export const prerender = true;
   function closeSheet() { $('#modal').hidden = true; }
   $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) closeSheet(); });
 
+  // Esc закрывает карточку, «/» ставит курсор в поиск. Менеджер работает с клавиатуры
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSheet();
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+      const q = $('#f-q');
+      if (q) { e.preventDefault(); q.focus(); }
+    }
+  });
+
   // ─────────── ОТКЛИКИ (канбан) ───────────
   async function viewApps() {
     const res = await api('/applications').catch(() => ({ items: [] }));
@@ -1044,6 +1106,10 @@ export const prerender = true;
         </div>
         <p class="warn">Получение откликов у HH платное — пакетами запросов. Не жмите синхронизацию без нужды.</p>
       </div>
+      <h2 style="font-size:16px;margin:26px 0 12px">Вакансии на сайте</h2>
+      <div id="site-vacancies"><p class="hint">Загрузка…</p></div>
+
+      <h2 style="font-size:16px;margin:26px 0 12px">Вакансии из HH</h2>
       <div class="tbl-wrap"><table class="tbl">
         <thead><tr><th>Вакансия</th><th>Код</th><th>На HH</th><th>Обновлена</th><th>Статус</th></tr></thead>
         <tbody>${(vac.items || []).map((v) => `<tr data-slug="${esc(v.slug)}">
@@ -1075,13 +1141,111 @@ export const prerender = true;
       btn.textContent = 'Синхронизировать';
       toast(r && r.ok ? 'Синхронизация прошла' : 'Не удалось: ' + ((r && r.error) || 'нет ответа'));
     });
+
+    loadSiteVacancies();
+  }
+
+  // ─────────── ВАКАНСИИ НА САЙТЕ ───────────
+  // Создание вакансии пишет JSON-файл в src/content/vacancies/. Дальше её подхватывает
+  // сборка Astro и страница /careers/. То есть «опубликовать» здесь значит «появится на сайте»
+  async function loadSiteVacancies() {
+    const box = $('#site-vacancies');
+    if (!box) return;
+    const res = await api('/site-vacancies').catch(() => ({ items: [] }));
+    const items = res.items || [];
+
+    if (res.dirMissing) {
+      box.innerHTML = '<p class="hint">Папка вакансий сайта не найдена. Проверьте, что сервер запущен из корня проекта.</p>';
+      return;
+    }
+
+    box.innerHTML = `<div class="bar">
+        <button class="btn" id="vac-add" type="button">Создать вакансию</button>
+        <p class="hint" style="margin:0">Опубликованная вакансия сразу появляется на сайте в разделе «Карьера»</p>
+      </div>
+      <form class="formbox" id="vac-form" hidden>
+        <input name="title" placeholder="Название вакансии" required />
+        <select name="place"><option>Офис</option><option>Производство</option></select>
+        <input name="employment" placeholder="Занятость (полная занятость)" />
+        <input name="experience" placeholder="Опыт (1–3 года)" />
+        <input name="schedule" placeholder="График (5/2, с 9 до 18)" />
+        <input name="contract" placeholder="Оформление (ТК РФ)" />
+        <input name="format" placeholder="Формат (в офисе / удалённо)" />
+        <input name="hh" placeholder="Ссылка на hh.ru (не обязательно)" />
+        <textarea name="duties" rows="4" placeholder="Обязанности — по одному пункту на строку"></textarea>
+        <textarea name="requirements" rows="4" placeholder="Требования — по одному пункту на строку"></textarea>
+        <textarea name="conditions" rows="4" placeholder="Условия — по одному пункту на строку"></textarea>
+        <div class="f-actions">
+          <button class="btn" type="submit">Опубликовать на сайте</button>
+          <button class="btn btn--ghost" type="button" id="vac-cancel">Отмена</button>
+        </div>
+      </form>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Вакансия</th><th>Место</th><th>Файл</th><th>На сайте</th><th></th></tr></thead>
+        <tbody>${items.map((v) => `<tr data-file="${esc(v.file)}">
+          <td><b>${esc(v.title)}</b>${v.broken ? ' <span class="badge" style="color:var(--bad)">битый JSON</span>' : ''}
+            ${v.experience ? `<div class="muted">${esc(v.experience)} · ${esc(v.employment || '')}</div>` : ''}</td>
+          <td>${esc(v.place) || '—'}</td>
+          <td class="muted">${esc(v.file)}</td>
+          <td><input type="checkbox" data-pub-check ${v.published !== false ? 'checked' : ''} /></td>
+          <td style="text-align:right">
+            ${me.role === 'admin' ? `<button class="icon-btn del" data-vac-del title="Удалить файл">×</button>` : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">Вакансий на сайте нет</td></tr>'}</tbody>
+      </table></div>`;
+
+    const form = $('#vac-form');
+    $('#vac-add').addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) $('[name=title]', form).focus();
+    });
+    $('#vac-cancel').addEventListener('click', () => { form.hidden = true; });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      new FormData(form).forEach((v, k) => { if (v !== '') body[k] = v; });
+      const r = await api('/site-vacancies', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+      if (!r || !r.ok) {
+        toast(r && r.error === 'slug_taken'
+          ? 'Такая вакансия уже есть — измените название'
+          : 'Не удалось создать вакансию');
+        return;
+      }
+      toast('Вакансия опубликована: ' + r.slug);
+      loadSiteVacancies();
+    });
+
+    $$('[data-pub-check]').forEach((cb) => {
+      cb.addEventListener('change', async () => {
+        const file = cb.closest('tr').dataset.file;
+        await api('/site-vacancies/' + encodeURIComponent(file), {
+          method: 'PATCH', body: JSON.stringify({ published: cb.checked }),
+        }).catch(() => {});
+        toast(cb.checked ? 'Вакансия вернулась на сайт' : 'Вакансия снята с публикации');
+      });
+    });
+    $$('[data-vac-del]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const file = b.closest('tr').dataset.file;
+        if (!confirm('Удалить файл вакансии? Текст пропадёт безвозвратно.')) return;
+        await api('/site-vacancies/' + encodeURIComponent(file), { method: 'DELETE' }).catch(() => {});
+        loadSiteVacancies();
+      });
+    });
   }
 
   // ─────────── СОТРУДНИКИ ───────────
   async function viewEmployees() {
     const res = await api('/employees').catch(() => ({ items: [] }));
     cache.employees = res.items || [];
-    $('#top-actions').innerHTML = '<button class="btn" id="emp-add" type="button">Добавить сотрудника</button>';
+    $('#top-actions').innerHTML = '<button class="btn btn--ghost" id="emp-csv" type="button">Выгрузить</button>' +
+      '<button class="btn" id="emp-add" type="button">Добавить сотрудника</button>';
+    $('#emp-csv').addEventListener('click', () => {
+      downloadCsv('sotrudniki.csv',
+        ['ФИО', 'Отдел', 'Должность', 'Телефон', 'Почта', 'Принят', 'Оклад', 'Статус'],
+        cache.employees.map((e) => [e.name, e.dept, e.pos, e.phone, e.email, e.hire, e.salary,
+          EMP_STATUS[e.status] ? EMP_STATUS[e.status].t : e.status]));
+    });
 
     const draw = () => {
       $('#content').innerHTML = `
@@ -1163,6 +1327,7 @@ export const prerender = true;
     const P = pays.items || [];
 
     $('#content').innerHTML = `
+      <div class="bar"><button class="btn btn--ghost" id="pay-csv" type="button">Выгрузить выплаты</button></div>
       <form class="formbox" id="pay-form">
         <select name="emp_id" required>
           <option value="">Сотрудник</option>
@@ -1189,6 +1354,10 @@ export const prerender = true;
       </table></div>
       <p class="sumline">Выплачено всего: ${P.reduce((s, p) => s + (Number(p.sum) || 0), 0).toLocaleString('ru-RU')} ₽</p>`;
 
+    $('#pay-csv').addEventListener('click', () => {
+      downloadCsv('vyplaty.csv', ['Дата', 'Сотрудник', 'Тип', 'Сумма', 'Комментарий'],
+        P.map((p) => [p.date, p.emp_name, PAY_TYPES[p.type] || p.type, p.sum, p.comment]));
+    });
     $('#pay-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const body = {};
@@ -1270,11 +1439,79 @@ export const prerender = true;
   }
 
   // ─────────── СОЦСЕТИ ───────────
+  // Пока это витрина на демо-цифрах: реальные значения из API ВК и Телеграма требуют
+  // токенов и согласований. Но структура и графики настоящие — когда появится источник,
+  // достаточно заменить buildDemoSeries на ответ API, верстка не изменится
+  const SOCIAL_DEMO = {
+    VK: { color: '#0077FF', base: 4820, growth: 0.012 },
+    Telegram: { color: '#2AABEE', base: 2150, growth: 0.018 },
+    YouTube: { color: '#FF0000', base: 9800, growth: 0.006 },
+    Дзен: { color: '#000000', base: 1400, growth: 0.009 },
+    'Яндекс.Метрика': { color: '#FC3F1D', base: 12400, growth: 0.011 },
+    'Google Analytics': { color: '#34A853', base: 18700, growth: 0.007 },
+  };
+
+  // Детерминированный «шум»: без Math.random график не дёргается при каждой перерисовке,
+  // и один и тот же период выглядит одинаково у всех
+  function buildDemoSeries(base, growth, days) {
+    const out = [];
+    let v = base;
+    for (let i = days; i >= 0; i--) {
+      const wave = Math.sin(i / 3.1) * 0.004 + Math.cos(i / 7.3) * 0.003;
+      v = Math.round(v * (1 + growth / days + wave));
+      out.push(v);
+    }
+    return out;
+  }
+
+  // Мини-график на SVG. Библиотеки не тащим: тут нужна одна ломаная на 30 точек
+  function sparkline(values, color, w, h) {
+    w = w || 260; h = h || 64;
+    if (!values.length) return '';
+    const min = Math.min.apply(null, values);
+    const max = Math.max.apply(null, values);
+    const span = max - min || 1;
+    const step = w / (values.length - 1 || 1);
+    const pts = values.map((v, i) => {
+      const x = Math.round(i * step * 100) / 100;
+      const y = Math.round((h - ((v - min) / span) * (h - 8) - 4) * 100) / 100;
+      return x + ',' + y;
+    });
+    const area = '0,' + h + ' ' + pts.join(' ') + ' ' + w + ',' + h;
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:' + h + 'px;display:block">' +
+      '<polygon points="' + area + '" fill="' + color + '" opacity="0.10"/>' +
+      '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+
   async function viewSocial() {
     const res = await api('/social').catch(() => ({ items: [] }));
     cache.social = res.items || [];
 
+    // Карточки-заглушки: соцсети + поисковики. Тут только цифры для наглядности
+    const demoCards = ['VK', 'Telegram', 'YouTube', 'Дзен', 'Яндекс.Метрика', 'Google Analytics'].map((net) => {
+      const cfg = SOCIAL_DEMO[net];
+      const series = buildDemoSeries(cfg.base, cfg.growth, 30);
+      const now = series[series.length - 1];
+      const was = series[0];
+      const delta = ((now - was) / was) * 100;
+      const sign = delta >= 0 ? '+' : '';
+      return '<div class="kpi">' +
+        '<div class="k-label" style="display:flex;align-items:center;gap:7px">' +
+        '<span style="width:9px;height:9px;border-radius:50%;background:' + cfg.color + ';display:inline-block"></span>' +
+        net + ' <span style="font-size:10px;color:var(--tx-3);text-transform:none">демо</span></div>' +
+        '<div class="k-val">' + now.toLocaleString('ru-RU') + '</div>' +
+        '<div class="k-sub" style="color:' + (delta >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
+        sign + delta.toFixed(1) + '% за 30 дней</div>' +
+        sparkline(series, cfg.color) + '</div>';
+    }).join('');
+
     $('#content').innerHTML = `
+      <p class="hint">Цифры на карточках — демонстрационные: нужны токены ВК, Телеграма и доступ
+        к счётчикам. Список групп ниже ведётся вручную и сохраняется.</p>
+      <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">${demoCards}</div>
+
+      <h2 style="font-size:16px;margin:26px 0 12px">Группы</h2>
       <form class="formbox" id="soc-form">
         <input name="name" placeholder="Название группы" required />
         <select name="net">
@@ -1329,6 +1566,22 @@ export const prerender = true;
         viewSocial();
       });
     });
+  }
+
+  // ── ВЫГРУЗКА В CSV ──
+  // Разделитель «;» и BOM: без этого русский Excel открывает файл одной колонкой
+  // и кракозябрами вместо кириллицы. Проверено на живых людях
+  function downloadCsv(filename, head, rows) {
+    const cell = (v) => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"';
+    const csv = [head].concat(rows).map((line) => line.map(cell).join(';')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    // Ссылку и blob снимаем сразу: в файле персданные, держать их в памяти незачем
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
   }
 
   // ─────────── СТАТИСТИКА ───────────
