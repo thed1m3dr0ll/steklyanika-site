@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { join, extname, dirname } from 'node:path';
-import { adminRoutes, serveMedia, serveResume } from './admin.mjs';
+import { adminRoutes, serveMedia, serveResume, migrateLeads } from './admin.mjs';
 import { json, readJson, readMultipart, MAX_BODY } from './http.mjs';
 
 const PORT = Number(process.env.API_PORT ?? 8787);
@@ -81,6 +81,10 @@ db.exec(`
     created_at    TEXT NOT NULL
   );
 `);
+// Доводим leads до рабочей таблицы уже ПОСЛЕ схемы: admin.mjs импортируется раньше,
+// и без этого вызова его ALTER-ы упирались в отсутствующую таблицу
+migrateLeads();
+
 
 const now = () => new Date().toISOString();
 
