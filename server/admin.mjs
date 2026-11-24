@@ -179,11 +179,22 @@ const leadColumns = [
   ['assigned_to', 'TEXT'],       // чей клиент. Пусто — значит никто не взял, и это видно в фильтре
   ['updated_at', 'TEXT'],        // когда последний раз трогали: по нему сортировка «свежие сверху»
 ];
-for (const [col, type] of leadColumns) {
-  try {
-    db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
-  } catch {
-    // колонка уже есть — нормальный случай на второй и последующих запусках
+// Прогоняем, пока не останется ни одной отсутствующей колонки. Причина — индексы:
+// CREATE INDEX IF NOT EXISTS idx_leads_* трогает updated_at, и если SQLite споткнётся
+// на нём, то ALTER-ы, стоявшие после индексов, не выполнятся никогда. Раньше здесь был
+// один проход с try/catch — и на живой базе updated_at просто не появлялся: счётчик
+// «2 новые» показывал, а список падал с «no such column». Цикл делает миграцию
+// самовосстанавливающейся: на следующем запуске недостающее всё равно добавится
+for (let pass = 0; pass < 5; pass++) {
+  const have = new Set(db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name));
+  const missing = leadColumns.filter(([col]) => !have.has(col));
+  if (!missing.length) break;
+  for (const [col, type] of missing) {
+    try {
+      db.exec(`ALTER TABLE leads ADD COLUMN ${col} ${type}`);
+    } catch (e) {
+      console.error('[migrate] leads.' + col, e?.message ?? e);
+    }
   }
 }
 
